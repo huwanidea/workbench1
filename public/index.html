@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>绩效考核工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">绩</div><div><strong>绩效考核工作台</strong><span>实时计算 · 本地保存</span></div></div>
+      <div class="top-actions"><button class="button ghost" data-action="import-trigger">导入 Excel</button><button class="button ghost" data-action="export-json">备份 JSON</button><button class="button primary" data-action="export-excel">导出 Excel</button><input id="excel-input" type="file" accept=".xlsx,.xls" hidden></div>
+    </header>
+    <div class="shell-body">
+      <aside class="sidebar">
+        <div>
+          <div class="sidebar-head"><span>工作区</span><button class="sidebar-toggle" data-action="toggle-sidebar" aria-label="收起侧边栏">‹</button></div>
+          <nav class="nav-list">
+            <button class="nav-item active" data-tab="daily"><span class="nav-short">日</span><span class="nav-label">每日工作台</span></button>
+            <button class="nav-item" data-tab="overview"><span class="nav-short">看</span><span class="nav-label">绩效看板</span></button>
+            <button class="nav-item" data-tab="summary"><span class="nav-short">全</span><span class="nav-label">工作全景</span></button>
+            <button class="nav-item" data-tab="acceptance"><span class="nav-short">验</span><span class="nav-label">验收工作</span></button>
+            <button class="nav-item" data-tab="monthly"><span class="nav-short">月</span><span class="nav-label">月度绩效</span></button>
+            <button class="nav-item" data-tab="settings"><span class="nav-short">规</span><span class="nav-label">规则与参数</span></button>
+          </nav>
+        </div>
+        <div class="side-note"><span class="status-dot"></span><span>本地数据已自动保存</span></div>
+      </aside>
+      <main class="main-content">
+        <div id="toast" class="toast" role="status"></div>
+        <section id="view-daily" class="view active"></section>
+        <section id="view-overview" class="view"></section>
+        <section id="view-summary" class="view"></section>
+        <section id="view-acceptance" class="view"></section>
+        <section id="view-monthly" class="view"></section>
+        <section id="view-settings" class="view"></section>
+      </main>
+    </div>
+  </div>
+  <dialog id="task-dialog" class="modal"><form id="task-form"><div class="modal-head"><div><span class="eyebrow">任务记录</span><h2 id="task-dialog-title">新增任务</h2></div><button type="button" class="icon-button" data-action="cancel-task" aria-label="关闭">×</button></div><div id="task-form-fields" class="form-grid"></div><div class="modal-foot"><button type="button" class="button ghost" data-action="cancel-task">取消</button><button type="button" class="button primary" data-action="save-task">保存任务</button></div></form></dialog>
+  <dialog id="summary-item-dialog" class="modal summary-item-modal"><form id="summary-item-form"><div class="modal-head"><div><span class="summary-dialog-kicker">工作全景</span><h2 id="summary-item-dialog-title">新增事项</h2></div><button type="button" class="icon-button" data-action="cancel-summary-item" aria-label="关闭">×</button></div><div id="summary-item-fields" class="form-grid summary-item-fields"></div><div class="modal-foot"><button type="button" class="button ghost" data-action="cancel-summary-item">取消</button><button type="button" class="button primary" data-action="save-summary-item">保存事项</button></div></form></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
