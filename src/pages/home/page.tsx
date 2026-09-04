@@ -1,13 +1,6 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>绩效考核工作台</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/theme.css">
-</head>
-<body>
+import { useEffect } from "react";
+
+const workbenchMarkup = `
   <div class="app-shell">
     <header class="topbar">
       <div class="brand"><div class="brand-mark">绩</div><div><strong>绩效考核工作台</strong><span>实时计算 · 按用户隔离</span></div></div>
@@ -43,6 +36,24 @@
   <dialog id="summary-item-dialog" class="modal summary-item-modal"><form id="summary-item-form"><div class="modal-head"><div><span class="summary-dialog-kicker">工作全景</span><h2 id="summary-item-dialog-title">新增事项</h2></div><button type="button" class="icon-button" data-action="cancel-summary-item" aria-label="关闭">×</button></div><div id="summary-item-fields" class="form-grid summary-item-fields"></div><div class="modal-foot"><button type="button" class="button ghost" data-action="cancel-summary-item">取消</button><button type="button" class="button primary" data-action="save-summary-item">保存事项</button></div></form></dialog>
   <dialog id="user-dialog" class="modal user-dialog"><form id="user-form"><div class="modal-head"><div><span class="summary-dialog-kicker">用户工作空间</span><h2 id="user-dialog-title">新建用户</h2></div><button type="button" class="icon-button" data-action="cancel-user" aria-label="关闭">×</button></div><div id="user-form-fields" class="form-grid"></div><div class="modal-foot"><button type="button" class="button ghost" data-action="cancel-user">取消</button><button type="submit" class="button primary">保存用户</button></div></form></dialog>
   <dialog id="template-dialog" class="modal template-dialog"><form id="template-form"><div class="modal-head"><div><span class="summary-dialog-kicker">绩效模板库</span><h2 id="template-dialog-title">新增绩效模板</h2></div><button type="button" class="icon-button" data-action="cancel-assessment-template" aria-label="关闭">×</button></div><div id="template-form-fields" class="template-form-fields"></div><div class="modal-foot"><button type="button" class="button ghost" data-action="cancel-assessment-template">取消</button><button type="submit" class="button primary">保存模板</button></div></form></dialog>
-  <script type="module" src="/app.js"></script>
-</body>
-</html>
+`;
+
+export default function Home() {
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = `${__BASE_PATH__}app.js`;
+    script.dataset.workbench = "true";
+    document.body.appendChild(script);
+
+    return () => script.remove();
+  }, []);
+
+  return (
+    <>
+      <link rel="stylesheet" href={`${__BASE_PATH__}styles.css`} />
+      <link rel="stylesheet" href={`${__BASE_PATH__}theme.css`} />
+      <div dangerouslySetInnerHTML={{ __html: workbenchMarkup }} />
+    </>
+  );
+}
