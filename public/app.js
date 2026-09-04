@@ -1,14 +1,159 @@
 import { DEFAULT_STATE, PLAN_TYPES, TASK_CATEGORIES, calculateDay, calculateMonth, dateToISO, monthKey, monthLabel, normalizeState, validateState } from './calc.js';
 
-const STORAGE_KEY = 'performance-review-state-v1';
-let state = normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'));
+const LEGACY_STORAGE_KEY = 'performance-review-state-v1';
+const USER_DIRECTORY_KEY = 'performance-review-users-v1';
+const ACTIVE_USER_KEY = 'performance-review-active-user-v1';
+const USER_STATE_PREFIX = 'performance-review-state-v2';
+const ASSESSMENT_TEMPLATE_KEY = 'performance-review-assessment-templates-v1';
+const DEFAULT_TEMPLATE_ID = 'general-task-performance';
+const OPERATIONS_DIRECTOR_TEMPLATE_ID = 'operations-director-monthly';
+const parseStoredJson = (key, fallback = null) => { try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; } };
+const BUILTIN_ASSESSMENT_TEMPLATES = [
+  {
+    id: DEFAULT_TEMPLATE_ID,
+    name: '通用任务绩效',
+    role: '通用岗位',
+    description: '按每日任务、工时、交付质量与综合素养汇总月度绩效。',
+    builtIn: true,
+    penaltyMax: 100,
+    bonusMax: 10,
+    dimensions: [
+      { name: '日常表现', weight: 80, indicators: [
+        { id: 'general-daily-performance', name: '每日任务绩效与工时水位', weight: 80, standard: '按当月每日任务绩效平均值折算，本项最高 80 分', autoSource: 'dailyPerformance' },
+      ] },
+      { name: '综合素养', weight: 20, indicators: [
+        { id: 'general-collaboration', name: '协同能力', weight: 5, standard: '按 0-100 分评价，折算为本项最高 5 分', autoSource: 'collaboration' },
+        { id: 'general-loyalty', name: '忠诚度', weight: 5, standard: '按 0-100 分评价，折算为本项最高 5 分', autoSource: 'loyalty' },
+        { id: 'general-discipline', name: '纪律性', weight: 5, standard: '按 0-100 分评价，折算为本项最高 5 分', autoSource: 'discipline' },
+        { id: 'general-learning', name: '学习力', weight: 5, standard: '按 0-100 分评价，折算为本项最高 5 分', autoSource: 'learning' },
+      ] },
+    ],
+  },
+  {
+    id: OPERATIONS_DIRECTOR_TEMPLATE_ID,
+    name: '运营总监月度绩效',
+    role: '运营总监',
+    description: '覆盖销售、重点工作、生态业务、风险合规、供应链与综合素养。',
+    builtIn: true,
+    penaltyMax: 100,
+    bonusMax: 10,
+    dimensions: [
+      { name: '销售业绩管理', weight: 30, indicators: [
+        { id: 'sales-target', name: '销售部门整体业绩达标率', weight: 20, standard: '95%-100% 得满分，每低 10% 扣 5 分，低于 50% 不得分' },
+        { id: 'certified-products', name: '认证产品达标情况及新品送样', weight: 5, standard: '目标完成 100/90/80/70/60%，得分 5/4/3/2/1，60% 以下 0 分' },
+        { id: 'regional-expansion', name: '区域拓展达标情况跟进', weight: 5, standard: '目标完成 100/90/80/70/60%，得分 5/4/3/2/1，60% 以下 0 分' },
+      ] },
+      { name: '重点工作执行', weight: 15, indicators: [
+        { id: 'executive-office', name: '总经办交办事项完成率', weight: 10, standard: '100% 得满分，每出现 1 项未完成扣 1 分' },
+        { id: 'cross-team', name: '跨部门协作效率', weight: 5, standard: '双指标达标得满分，单项达标得 50%，双项不达标不得分' },
+      ] },
+      { name: '生态服务业务推进', weight: 15, indicators: [
+        { id: 'ecosystem-events', name: '美食节、品鉴会、餐饮培训及厨师交流四项指标', weight: 10, standard: '四项指标按完成比例得分，均达标得满分' },
+        { id: 'weiju-project', name: '协助味聚平台项目落地情况', weight: 5, standard: '85% 以上满分，每低 5% 扣 15%，低于 70% 不得分' },
+      ] },
+      { name: '风险合规把控', weight: 20, indicators: [
+        { id: 'contract-compliance', name: '合同审核合规率', weight: 4, standard: '100% 得满分，每出现 1 份不合规合同扣 20%' },
+        { id: 'purchase-compliance', name: '采购环节合规率', weight: 4, standard: '100% 得满分，每出现 1 次违规扣 20%' },
+        { id: 'customs-compliance', name: '报关清关合规率', weight: 4, standard: '100% 得满分，每出现 1 次失职扣 30%' },
+        { id: 'finance-compliance', name: '财税规范达标率', weight: 4, standard: '100% 得满分，出现任何违规不得分' },
+        { id: 'operation-safety', name: '公司总体运营安全把控', weight: 4, standard: '100% 得满分，出现任何违规不得分' },
+      ] },
+      { name: '供应链运营监督', weight: 10, indicators: [
+        { id: 'purchase-delivery', name: '采购达成率', weight: 4, standard: '98% 以上满分，每低 1% 扣 5%，低于 90% 不得分' },
+        { id: 'warehouse-operation', name: '仓库运营达标率', weight: 4, standard: '99% 以上满分，每低 0.5% 扣 10%，低于 95% 不得分' },
+        { id: 'warehouse-service', name: '仓库第三方服务推进完成率', weight: 2, standard: '85% 以上满分，每低 5% 扣 15%，低于 70% 不得分' },
+      ] },
+      { name: '综合素养表现', weight: 10, indicators: [
+        { id: 'mission-view', name: '企业使命感与大局观', weight: 6, standard: '8-10 分得满分，6-7 分得 50%，低于 6 分不得分' },
+        { id: 'learning-communication', name: '行业学习与创新、情商与沟通交流', weight: 4, standard: '8-10 分得满分，6-7 分得 50%，低于 6 分不得分' },
+      ] },
+    ],
+  },
+];
+function normalizeAssessmentTemplate(template) {
+  if (!template || !String(template.name || '').trim() || !Array.isArray(template.dimensions)) return null;
+  const dimensions = template.dimensions.map((dimension) => {
+    const indicators = Array.isArray(dimension.indicators) ? dimension.indicators.map((indicator) => ({
+      id: String(indicator.id || crypto.randomUUID()),
+      name: String(indicator.name || '').trim(),
+      weight: Math.min(100, Math.max(0, Number(indicator.weight) || 0)),
+      standard: String(indicator.standard || '').trim(),
+    })).filter((indicator) => indicator.name && indicator.weight > 0) : [];
+    return { name: String(dimension.name || '').trim(), weight: indicators.reduce((sum, indicator) => sum + indicator.weight, 0), indicators };
+  }).filter((dimension) => dimension.name && dimension.indicators.length);
+  if (!dimensions.length) return null;
+  const penaltyMax = Number(template.penaltyMax);
+  const bonusMax = Number(template.bonusMax);
+  return {
+    id: String(template.id || `custom-${crypto.randomUUID()}`),
+    name: String(template.name).trim(),
+    role: String(template.role || '自定义岗位').trim() || '自定义岗位',
+    description: String(template.description || '').trim(),
+    builtIn: false,
+    penaltyMax: Number.isFinite(penaltyMax) ? Math.min(100, Math.max(0, penaltyMax)) : 100,
+    bonusMax: Number.isFinite(bonusMax) ? Math.min(100, Math.max(0, bonusMax)) : 10,
+    dimensions,
+  };
+}
+let customAssessmentTemplates = (parseStoredJson(ASSESSMENT_TEMPLATE_KEY, []) || []).map(normalizeAssessmentTemplate).filter(Boolean);
+let ASSESSMENT_TEMPLATES = [...BUILTIN_ASSESSMENT_TEMPLATES, ...customAssessmentTemplates];
+function saveAssessmentTemplateLibrary() {
+  localStorage.setItem(ASSESSMENT_TEMPLATE_KEY, JSON.stringify(customAssessmentTemplates));
+  ASSESSMENT_TEMPLATES = [...BUILTIN_ASSESSMENT_TEMPLATES, ...customAssessmentTemplates];
+}
+const assessmentTemplate = (id) => ASSESSMENT_TEMPLATES.find((template) => template.id === id) || ASSESSMENT_TEMPLATES[0];
+const assessmentTemplateOptions = (selectedId) => ASSESSMENT_TEMPLATES.map((template) => `<option value="${template.id}" ${template.id === selectedId ? 'selected' : ''}>${esc(template.name)} · ${esc(template.role)}</option>`).join('');
+const USER_PREFERENCE_KEYS = ['performance-selected-daily-task', 'performance-daily-view-mode', 'performance-daily-layout-preset', 'performance-daily-task-file-open', 'performance-daily-row-heights', 'performance-daily-row-sizes', 'performance-daily-panel-layout', 'performance-tomorrow-panel-visible-v1', 'performance-demo-seeded-v2'];
+const makeUserRecord = (profile = {}) => ({
+  id: crypto.randomUUID(),
+  name: String(profile.name || '').trim() || '默认用户',
+  department: String(profile.department || '').trim(),
+  position: String(profile.position || '').trim(),
+  manager: String(profile.manager || '').trim(),
+  assessmentTemplateId: assessmentTemplate(profile.assessmentTemplateId).id,
+  createdAt: new Date().toISOString(),
+});
+function loadUserDirectory() {
+  const stored = parseStoredJson(USER_DIRECTORY_KEY, []);
+  const validUsers = Array.isArray(stored) ? stored.filter((user) => user?.id && user?.name).map((user) => ({ ...user, id: String(user.id), name: String(user.name), assessmentTemplateId: assessmentTemplate(user.assessmentTemplateId).id })) : [];
+  if (validUsers.length) {
+    const storedActiveId = localStorage.getItem(ACTIVE_USER_KEY);
+    return { users: validUsers, activeUserId: validUsers.some((user) => user.id === storedActiveId) ? storedActiveId : validUsers[0].id };
+  }
+  const legacyState = normalizeState(parseStoredJson(LEGACY_STORAGE_KEY));
+  const user = makeUserRecord(legacyState.profile);
+  localStorage.setItem(USER_DIRECTORY_KEY, JSON.stringify([user]));
+  localStorage.setItem(ACTIVE_USER_KEY, user.id);
+  localStorage.setItem(`${USER_STATE_PREFIX}:${user.id}`, JSON.stringify(legacyState));
+  USER_PREFERENCE_KEYS.forEach((key) => {
+    const value = localStorage.getItem(key);
+    if (value !== null) localStorage.setItem(`${key}:${user.id}`, value);
+  });
+  return { users: [user], activeUserId: user.id };
+}
+const initialUserDirectory = loadUserDirectory();
+let users = initialUserDirectory.users;
+let activeUserId = initialUserDirectory.activeUserId;
+const userStateKey = (userId = activeUserId) => `${USER_STATE_PREFIX}:${userId}`;
+const userPreferenceKey = (key, userId = activeUserId) => `${key}:${userId}`;
+const saveUserDirectory = () => {
+  localStorage.setItem(USER_DIRECTORY_KEY, JSON.stringify(users));
+  localStorage.setItem(ACTIVE_USER_KEY, activeUserId);
+};
+saveUserDirectory();
+const activeUser = () => users.find((user) => user.id === activeUserId) || users[0];
+let state = normalizeState(parseStoredJson(userStateKey()));
 let activeTab = 'daily';
 let currentMonth = new Date().getMonth() + 1;
 let selectedDate = '';
 let selectedDailyDate = dateToISO(new Date());
-let selectedDailyTaskId = localStorage.getItem('performance-selected-daily-task') || '';
+let selectedDailyTaskId = localStorage.getItem(userPreferenceKey('performance-selected-daily-task')) || '';
 let editingTaskId = null;
 let editingSubtasks = [];
+let editingUserId = null;
+let editingAssessmentTemplateId = null;
+let editingTemplateDimensions = [];
+let userMenuOpen = false;
 let taskFilters = { search: '', planType: '', status: '' };
 let summaryFilters = { search: '', source: '', status: '' };
 let selectedWorkspaceView = 'performance';
@@ -16,7 +161,7 @@ let editingSummaryItem = null;
 let draggedSortableBlock = null;
 let pointerDailyPanelDrag = null;
 let resizingDailyPanel = null;
-let dailyTodayViewMode = localStorage.getItem('performance-daily-view-mode') === 'board' ? 'board' : 'list';
+let dailyTodayViewMode = localStorage.getItem(userPreferenceKey('performance-daily-view-mode')) === 'board' ? 'board' : 'list';
 const DAILY_PANEL_KEYS = ['today', 'handoff', 'tomorrow', 'weekly', 'monthly'];
 const DAILY_GRID_UNITS = 1000;
 const DAILY_PANEL_HARD_MIN_PX = 120;
@@ -24,10 +169,10 @@ const DAILY_PANEL_WRAP_PX = 230;
 const DAILY_PANEL_DEFAULTS = { today: { order: 0, span: 500, frozen: false }, handoff: { order: 1, span: 500, frozen: false }, tomorrow: { order: 2, span: 500, frozen: false }, weekly: { order: 3, span: 500, frozen: false }, monthly: { order: 4, span: 500, frozen: false } };
 const DAILY_LAYOUT_PRESETS = { split: { label: '上 2 下 3', rows: [2, 3] }, stacked: { label: '上 1 中 1 下 3', rows: [1, 1, 3] } };
 const DAILY_VISIBLE_PANEL_KEYS = ['today', 'handoff', 'tomorrow', 'weekly', 'monthly'];
-let dailyLayoutPreset = DAILY_LAYOUT_PRESETS[localStorage.getItem('performance-daily-layout-preset')] ? localStorage.getItem('performance-daily-layout-preset') : 'stacked';
-let dailyTaskFileOpen = localStorage.getItem('performance-daily-task-file-open') === null ? dailyLayoutPreset === 'stacked' : localStorage.getItem('performance-daily-task-file-open') === '1';
-let dailyRowHeights = (() => { try { return JSON.parse(localStorage.getItem('performance-daily-row-heights') || '{}'); } catch { return {}; } })();
-let dailyLayoutRowSizes = (() => { try { return JSON.parse(localStorage.getItem('performance-daily-row-sizes') || '{}'); } catch { return {}; } })();
+let dailyLayoutPreset = DAILY_LAYOUT_PRESETS[localStorage.getItem(userPreferenceKey('performance-daily-layout-preset'))] ? localStorage.getItem(userPreferenceKey('performance-daily-layout-preset')) : 'stacked';
+let dailyTaskFileOpen = localStorage.getItem(userPreferenceKey('performance-daily-task-file-open')) === null ? dailyLayoutPreset === 'stacked' : localStorage.getItem(userPreferenceKey('performance-daily-task-file-open')) === '1';
+let dailyRowHeights = parseStoredJson(userPreferenceKey('performance-daily-row-heights'), {});
+let dailyLayoutRowSizes = parseStoredJson(userPreferenceKey('performance-daily-row-sizes'), {});
 let resizingDailyRow = null;
 function normalizedStoredSpan(value, fallback) {
   const numeric = Number(value);
@@ -37,21 +182,24 @@ function normalizedStoredSpan(value, fallback) {
 }
 function loadDailyPanelLayout() {
   try {
-    const stored = JSON.parse(localStorage.getItem('performance-daily-panel-layout') || '{}');
+    const stored = JSON.parse(localStorage.getItem(userPreferenceKey('performance-daily-panel-layout')) || '{}');
     return Object.fromEntries(DAILY_PANEL_KEYS.map((key) => [key, { order: Number.isFinite(Number(stored[key]?.order)) ? Number(stored[key].order) : DAILY_PANEL_DEFAULTS[key].order, span: normalizedStoredSpan(stored[key]?.span, DAILY_PANEL_DEFAULTS[key].span), frozen: Boolean(stored[key]?.frozen) }]));
   } catch { return structuredClone(DAILY_PANEL_DEFAULTS); }
 }
 let dailyPanelLayout = loadDailyPanelLayout();
-if (localStorage.getItem('performance-tomorrow-panel-visible-v1') !== '1') {
-  const ordered = DAILY_VISIBLE_PANEL_KEYS.filter((key) => key !== 'tomorrow').sort((a, b) => dailyPanelLayout[a].order - dailyPanelLayout[b].order);
-  const handoffIndex = ordered.indexOf('handoff');
-  ordered.splice(handoffIndex >= 0 ? handoffIndex + 1 : Math.min(2, ordered.length), 0, 'tomorrow');
-  ordered.forEach((key, index) => { dailyPanelLayout[key].order = index; });
-  localStorage.setItem('performance-tomorrow-panel-visible-v1', '1');
+function migrateTomorrowPanelVisibility() {
+  if (localStorage.getItem(userPreferenceKey('performance-tomorrow-panel-visible-v1')) !== '1') {
+    const ordered = DAILY_VISIBLE_PANEL_KEYS.filter((key) => key !== 'tomorrow').sort((a, b) => dailyPanelLayout[a].order - dailyPanelLayout[b].order);
+    const handoffIndex = ordered.indexOf('handoff');
+    ordered.splice(handoffIndex >= 0 ? handoffIndex + 1 : Math.min(2, ordered.length), 0, 'tomorrow');
+    ordered.forEach((key, index) => { dailyPanelLayout[key].order = index; });
+    localStorage.setItem(userPreferenceKey('performance-tomorrow-panel-visible-v1'), '1');
+  }
 }
-const saveDailyPanelLayout = () => localStorage.setItem('performance-daily-panel-layout', JSON.stringify(dailyPanelLayout));
-const saveDailyRowHeights = () => localStorage.setItem('performance-daily-row-heights', JSON.stringify(dailyRowHeights));
-const saveDailyLayoutRowSizes = () => localStorage.setItem('performance-daily-row-sizes', JSON.stringify(dailyLayoutRowSizes));
+migrateTomorrowPanelVisibility();
+const saveDailyPanelLayout = () => localStorage.setItem(userPreferenceKey('performance-daily-panel-layout'), JSON.stringify(dailyPanelLayout));
+const saveDailyRowHeights = () => localStorage.setItem(userPreferenceKey('performance-daily-row-heights'), JSON.stringify(dailyRowHeights));
+const saveDailyLayoutRowSizes = () => localStorage.setItem(userPreferenceKey('performance-daily-row-sizes'), JSON.stringify(dailyLayoutRowSizes));
 function currentDailyRowSizes() {
   const stored = dailyLayoutRowSizes[dailyLayoutPreset];
   const valid = Array.isArray(stored) && stored.length && stored.every((size) => Number.isInteger(Number(size)) && Number(size) > 0) && stored.reduce((sum, size) => sum + Number(size), 0) === DAILY_VISIBLE_PANEL_KEYS.length;
@@ -142,8 +290,8 @@ function applyDailyLayoutPreset(preset) {
   if (!DAILY_LAYOUT_PRESETS[preset]) return;
   dailyLayoutPreset = preset;
   dailyTaskFileOpen = preset === 'stacked';
-  localStorage.setItem('performance-daily-task-file-open', dailyTaskFileOpen ? '1' : '0');
-  localStorage.setItem('performance-daily-layout-preset', preset);
+  localStorage.setItem(userPreferenceKey('performance-daily-task-file-open'), dailyTaskFileOpen ? '1' : '0');
+  localStorage.setItem(userPreferenceKey('performance-daily-layout-preset'), preset);
   dailyLayoutRowSizes[preset] = [...DAILY_LAYOUT_PRESETS[preset].rows];
   saveDailyLayoutRowSizes();
   for (const row of dailyPanelRows()) {
@@ -209,12 +357,132 @@ const num = (value, digits = 1) => value === null || value === undefined || valu
 const pct = (value) => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
 const PERCENT_FIELDS = ['completionPct', 'collaborationPct', 'innovation', 'selfScore', 'reviewerScore'];
 const formNumber = (key, value) => value === '' ? '' : PERCENT_FIELDS.includes(key) ? Math.min(100, Math.max(0, Number(value) || 0)) : Math.max(0, Number(value) || 0);
-const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+const save = () => {
+  localStorage.setItem(userStateKey(), JSON.stringify(state));
+  const user = activeUser();
+  if (!user) return;
+  const profileName = String(state.profile.name || '').trim();
+  if (profileName) user.name = profileName;
+  user.department = String(state.profile.department || '').trim();
+  user.position = String(state.profile.position || '').trim();
+  user.manager = String(state.profile.manager || '').trim();
+  saveUserDirectory();
+};
 const toast = (message) => { const node = $('#toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2600); };
 const currentYear = () => Number(state.profile.year) || new Date().getFullYear();
 const selectedMonthKey = () => monthKey(currentYear(), currentMonth);
 const taskForId = (id) => state.tasks.find((task) => task.id === id);
 const inputValue = (value) => esc(value ?? '');
+
+function renderUserSwitcher() {
+  const root = $('#user-switcher');
+  if (!root) return;
+  const current = activeUser();
+  const name = current?.name || '默认用户';
+  root.innerHTML = `<div class="user-switcher"><button type="button" class="user-switcher-button" data-action="toggle-user-menu" aria-haspopup="menu" aria-expanded="${userMenuOpen}"><span class="user-avatar">${esc(name.slice(0, 1).toUpperCase())}</span><span class="user-switcher-copy"><small>当前用户</small><strong>${esc(name)}</strong></span><span class="user-switcher-chevron">⌄</span></button>${userMenuOpen ? `<div class="user-menu" role="menu"><div class="user-menu-title">切换工作空间</div><div class="user-menu-list">${users.map((user) => `<div class="user-menu-row ${user.id === activeUserId ? 'active' : ''}"><button type="button" class="user-menu-select" data-action="switch-user" data-user-id="${esc(user.id)}"><span class="user-avatar small">${esc(user.name.slice(0, 1).toUpperCase())}</span><span><strong>${esc(user.name)}</strong><small>${esc(assessmentTemplate(user.assessmentTemplateId).name)} · ${esc([user.department, user.position].filter(Boolean).join(' · ') || '独立工作空间')}</small></span>${user.id === activeUserId ? '<span class="user-current-mark">✓</span>' : ''}</button><button type="button" class="user-menu-edit" data-action="edit-user" data-user-id="${esc(user.id)}">编辑</button></div>`).join('')}</div><button type="button" class="user-menu-add" data-action="add-user"><span>＋</span> 新建用户</button></div>` : ''}</div>`;
+}
+
+function openUserDialog(userId = '') {
+  editingUserId = userId || null;
+  const user = users.find((entry) => entry.id === userId);
+  const userState = user ? normalizeState(parseStoredJson(userStateKey(user.id))) : normalizeState(DEFAULT_STATE);
+  const profile = userState.profile;
+  $('#user-dialog-title').textContent = user ? '编辑用户' : '新建用户';
+  const templateId = assessmentTemplate(user?.assessmentTemplateId).id;
+  $('#user-form-fields').innerHTML = `<label class="form-field full"><span class="label">姓名 *</span><input class="input" name="name" required maxlength="30" value="${inputValue(user?.name || profile.name)}" placeholder="输入姓名"></label><label class="form-field"><span class="label">部门</span><input class="input" name="department" maxlength="40" value="${inputValue(user?.department || profile.department)}" placeholder="例如：产品研发部"></label><label class="form-field"><span class="label">岗位</span><input class="input" name="position" maxlength="40" value="${inputValue(user?.position || profile.position)}" placeholder="例如：前端工程师"></label><label class="form-field"><span class="label">直属负责人</span><input class="input" name="manager" maxlength="30" value="${inputValue(user?.manager || profile.manager)}" placeholder="负责人姓名"></label><label class="form-field full"><span class="label">绩效考核模板</span><select class="select" name="assessmentTemplateId">${assessmentTemplateOptions(templateId)}</select><span class="helper">分配后，该用户的月度绩效页会自动使用对应考核制度。</span></label>${user && users.length > 1 ? `<div class="form-field full user-delete-zone"><span><strong>删除用户</strong><small>该用户的任务、计划和布局数据会从本机删除。</small></span><button type="button" class="button danger" data-action="delete-user" data-user-id="${esc(user.id)}">删除</button></div>` : ''}`;
+  userMenuOpen = false;
+  renderUserSwitcher();
+  $('#user-dialog').showModal();
+  $('#user-form [name="name"]')?.focus();
+}
+
+function closeUserDialog() {
+  editingUserId = null;
+  $('#user-dialog').close();
+}
+
+function loadActiveUserWorkspace(userId) {
+  if (!users.some((user) => user.id === userId)) return false;
+  activeUserId = userId;
+  saveUserDirectory();
+  state = normalizeState(parseStoredJson(userStateKey()));
+  selectedDailyTaskId = localStorage.getItem(userPreferenceKey('performance-selected-daily-task')) || '';
+  dailyTodayViewMode = localStorage.getItem(userPreferenceKey('performance-daily-view-mode')) === 'board' ? 'board' : 'list';
+  const storedPreset = localStorage.getItem(userPreferenceKey('performance-daily-layout-preset'));
+  dailyLayoutPreset = DAILY_LAYOUT_PRESETS[storedPreset] ? storedPreset : 'stacked';
+  const storedFileOpen = localStorage.getItem(userPreferenceKey('performance-daily-task-file-open'));
+  dailyTaskFileOpen = storedFileOpen === null ? dailyLayoutPreset === 'stacked' : storedFileOpen === '1';
+  dailyRowHeights = parseStoredJson(userPreferenceKey('performance-daily-row-heights'), {});
+  dailyLayoutRowSizes = parseStoredJson(userPreferenceKey('performance-daily-row-sizes'), {});
+  dailyPanelLayout = loadDailyPanelLayout();
+  migrateTomorrowPanelVisibility();
+  normalizeDailyRowSpans();
+  selectedDate = '';
+  selectedDailyDate = dateToISO(new Date());
+  selectedDailyTaskId = state.tasks.some((task) => task.id === selectedDailyTaskId) ? selectedDailyTaskId : '';
+  selectedWorkspaceView = 'performance';
+  summaryFilters = { search: '', source: '', status: '' };
+  expandedTaskIds.clear();
+  expandedPoolIds.clear();
+  userMenuOpen = false;
+  migrateDailyPlansToTasks();
+  render();
+  return true;
+}
+
+function switchUser(userId) {
+  if (userId === activeUserId) { userMenuOpen = false; renderUserSwitcher(); return; }
+  save();
+  if (loadActiveUserWorkspace(userId)) toast(`已切换到 ${activeUser()?.name || '用户'} 的工作空间`);
+}
+
+function saveUserFromDialog() {
+  const data = Object.fromEntries(new FormData($('#user-form')).entries());
+  const name = String(data.name || '').trim();
+  if (!name) return toast('请输入用户姓名');
+  if (users.some((user) => user.id !== editingUserId && user.name.trim().toLowerCase() === name.toLowerCase())) return toast('已存在同名用户');
+  const profile = { name, department: String(data.department || '').trim(), position: String(data.position || '').trim(), manager: String(data.manager || '').trim() };
+  const assessmentTemplateId = assessmentTemplate(data.assessmentTemplateId).id;
+  if (editingUserId) {
+    const user = users.find((entry) => entry.id === editingUserId);
+    if (!user) return;
+    Object.assign(user, profile, { assessmentTemplateId });
+    const targetState = editingUserId === activeUserId ? state : normalizeState(parseStoredJson(userStateKey(editingUserId)));
+    Object.assign(targetState.profile, profile);
+    localStorage.setItem(userStateKey(editingUserId), JSON.stringify(targetState));
+    if (editingUserId === activeUserId) state = targetState;
+    saveUserDirectory();
+    closeUserDialog();
+    render();
+    toast('用户信息已更新');
+    return;
+  }
+  const user = makeUserRecord({ ...profile, assessmentTemplateId });
+  Object.assign(user, profile);
+  users.push(user);
+  const newState = normalizeState({ profile: { ...profile, year: currentYear() } });
+  localStorage.setItem(userStateKey(user.id), JSON.stringify(newState));
+  localStorage.setItem(userPreferenceKey('performance-demo-seeded-v2', user.id), '1');
+  saveUserDirectory();
+  closeUserDialog();
+  loadActiveUserWorkspace(user.id);
+  toast(`已创建 ${name} 的独立工作空间`);
+}
+
+function deleteUser(userId) {
+  if (users.length <= 1) return toast('至少保留一个用户');
+  const user = users.find((entry) => entry.id === userId);
+  if (!user || !confirm(`确认删除“${user.name}”及其全部本地工作数据？`)) return;
+  users = users.filter((entry) => entry.id !== userId);
+  localStorage.removeItem(userStateKey(userId));
+  USER_PREFERENCE_KEYS.forEach((key) => localStorage.removeItem(userPreferenceKey(key, userId)));
+  const wasActive = userId === activeUserId;
+  if (wasActive) activeUserId = users[0].id;
+  saveUserDirectory();
+  closeUserDialog();
+  if (wasActive) loadActiveUserWorkspace(activeUserId); else render();
+  toast('用户及其本地数据已删除');
+}
 
 function setActiveTab(tab) {
   if (tab === 'tasks') { tab = 'summary'; selectedWorkspaceView = 'performance'; }
@@ -225,6 +493,7 @@ function setActiveTab(tab) {
 }
 
 function render() {
+  renderUserSwitcher();
   $('#view-daily').innerHTML = renderDailyWorkspace();
   syncDailyPanelLockState();
   $('#view-overview').innerHTML = renderOverview();
@@ -232,6 +501,7 @@ function render() {
   $('#view-acceptance').innerHTML = renderAcceptance();
   $('#view-monthly').innerHTML = renderMonthly();
   $('#view-settings').innerHTML = renderSettings();
+  $('#view-settings .page-head')?.insertAdjacentHTML('afterend', renderTemplateLibrary());
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.tab === activeTab));
   document.querySelectorAll('.view').forEach((view) => view.classList.toggle('active', view.id === `view-${activeTab}`));
   const sidebar = document.querySelector('.sidebar');
@@ -279,7 +549,7 @@ function syncDailyRowResizeHandles() {
 
 function renderProfileStrip() {
   const fields = [['name', '姓名'], ['department', '部门'], ['position', '岗位'], ['manager', '直属负责人']];
-  return `<div class="profile-strip card">${fields.map(([key, label]) => `<div class="profile-cell"><small>${label}</small><div class="profile-edit"><input class="input" data-profile="${key}" value="${inputValue(state.profile[key])}" placeholder="未填写"></div></div>`).join('')}<div class="profile-cell"><small>考核年度</small><input class="input" data-profile="year" type="number" min="2000" max="2100" value="${currentYear()}"></div></div>`;
+  return `<div class="profile-strip card">${fields.map(([key, label]) => `<div class="profile-cell"><small>${label}</small><div class="profile-edit"><input class="input" data-profile="${key}" value="${inputValue(state.profile[key])}" placeholder="未填写"></div></div>`).join('')}<div class="profile-cell"><small>考核模板</small><select class="select" data-user-template>${assessmentTemplateOptions(activeUser()?.assessmentTemplateId)}</select></div><div class="profile-cell"><small>考核年度</small><input class="input" data-profile="year" type="number" min="2000" max="2100" value="${currentYear()}"></div></div>`;
 }
 
 function renderOverview() {
@@ -326,7 +596,7 @@ function migrateDailyPlansToTasks() {
 }
 
 function seedDemoData() {
-  const demoKey = 'performance-demo-seeded-v2';
+  const demoKey = userPreferenceKey('performance-demo-seeded-v2');
   if (localStorage.getItem(demoKey) === '1') return;
   const today = dateToISO(new Date());
   const tomorrow = shiftDate(today, 1);
@@ -488,15 +758,17 @@ function renderDailyWorkspace() {
   const todayTaskEntries = sortWorkBlocks(todayTasks.map((item) => ({ kind: 'task', item })));
   if (!todayTaskEntries.some((entry) => entry.item.id === selectedDailyTaskId)) {
     selectedDailyTaskId = todayTaskEntries[0]?.item.id || '';
-    localStorage.setItem('performance-selected-daily-task', selectedDailyTaskId);
+    localStorage.setItem(userPreferenceKey('performance-selected-daily-task'), selectedDailyTaskId);
   }
   const selectedTask = todayTaskEntries.find((entry) => entry.item.id === selectedDailyTaskId)?.item || null;
-  const dailyTaskListRow = (task) => {
+  const dailyTaskListRow = (task, index) => {
     const calculated = calculateDay(task.date, [task], state).tasks[0];
     const progressStatus = Number(task.completionPct) >= 100 ? 'done' : Number(task.completionPct) > 0 ? 'doing' : 'todo';
     const group = `daily|${date}|today`;
-    return `<div class="today-task-row ${task.id === selectedDailyTaskId ? 'selected' : ''}" ${blockAttrs(group, `task:${task.id}`)}><span class="daily-block-handle" draggable="true" title="拖拽排序" aria-hidden="true">⋮⋮</span><input class="daily-task-check" type="checkbox" data-action="toggle-daily-task" data-id="${task.id}" aria-label="标记 ${esc(task.content || '未命名任务')} 完成" ${progressStatus === 'done' ? 'checked' : ''}><button type="button" class="today-task-select" data-action="select-daily-task" data-id="${task.id}"><span class="task-file-icon">□</span><span class="today-task-copy"><strong>${esc(task.content || '未命名任务')}</strong><small>${esc(task.category || '其他')} · <span class="daily-info-status ${calculated.validationErrors.length ? 'incomplete' : 'complete'}">${calculated.validationErrors.length ? '信息待完善' : '信息完整'}</span></small></span></button><select class="daily-status-select ${progressStatus === 'done' ? 'tone-green' : progressStatus === 'doing' ? 'tone-gold' : ''}" data-daily-task-status data-id="${task.id}"><option value="todo" ${progressStatus === 'todo' ? 'selected' : ''}>待开始</option><option value="doing" ${progressStatus === 'doing' ? 'selected' : ''}>进行中</option><option value="done" ${progressStatus === 'done' ? 'selected' : ''}>已完成</option></select></div>`;
+    return `<div class="today-task-row ${task.id === selectedDailyTaskId ? 'selected' : ''}" ${blockAttrs(group, `task:${task.id}`)}><span class="daily-block-handle today-row-index" draggable="true" title="第 ${index + 1} 行 · 拖拽排序" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input class="daily-task-check" type="checkbox" data-action="toggle-daily-task" data-id="${task.id}" aria-label="标记 ${esc(task.content || '未命名任务')} 完成" ${progressStatus === 'done' ? 'checked' : ''}><button type="button" class="today-task-select" data-action="select-daily-task" data-id="${task.id}"><span class="task-file-icon">□</span><span class="today-task-copy"><strong>${esc(task.content || '未命名任务')}</strong><small>${esc(task.category || '其他')} · <span class="daily-info-status ${calculated.validationErrors.length ? 'incomplete' : 'complete'}">${calculated.validationErrors.length ? '信息待完善' : '信息完整'}</span></small></span></button><select class="daily-status-select ${progressStatus === 'done' ? 'tone-green' : progressStatus === 'doing' ? 'tone-gold' : ''}" data-daily-task-status data-id="${task.id}"><option value="todo" ${progressStatus === 'todo' ? 'selected' : ''}>待开始</option><option value="doing" ${progressStatus === 'doing' ? 'selected' : ''}>进行中</option><option value="done" ${progressStatus === 'done' ? 'selected' : ''}>已完成</option></select></div>`;
   };
+  const blankTaskRowCount = Math.max(4, 8 - todayTaskEntries.length);
+  const blankTaskRows = Array.from({ length: blankTaskRowCount }, (_, slot) => `<div class="today-task-row today-task-blank-row"><span class="today-row-index" aria-hidden="true">${todayTaskEntries.length + slot + 1}</span><span class="today-blank-check" aria-hidden="true"></span><input class="today-quick-task-input" data-daily-quick-task data-date="${date}" data-quick-slot="${slot}" aria-label="第 ${todayTaskEntries.length + slot + 1} 行新任务" placeholder="${slot === 0 ? '输入任务，按 Enter 到下一行' : ''}"><span class="today-blank-status">待开始</span></div>`).join('');
   const dailyTaskField = (task, field, label, type = 'text', extra = '') => `<label class="today-doc-field"><span>${label}</span><input class="input" data-daily-task-file-field="${field}" data-id="${task.id}" type="${type}" value="${inputValue(task[field])}" ${extra}></label>`;
   const dailyTaskSelect = (task, field, label, options) => `<label class="today-doc-field"><span>${label}</span><select class="select" data-daily-task-file-field="${field}" data-id="${task.id}">${options.map((option) => `<option value="${inputValue(option)}" ${String(task[field] || '') === String(option) ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select></label>`;
   const renderDailyTaskDocument = (task) => {
@@ -528,7 +800,7 @@ function renderDailyWorkspace() {
   };
 
   const panelContent = {
-    today: `<div class="daily-panel-head"><div><span class="daily-kicker">LIVE</span><h2>今日工作动态</h2><p>任务文件 · 点击左侧任务查看右侧文档</p></div><div class="daily-panel-tools"><div class="daily-view-switch"><button class="${dailyTodayViewMode === 'list' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="list">文档</button><button class="${dailyTodayViewMode === 'board' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="board">看板</button></div><button class="link-button" data-action="toggle-daily-task-file">${dailyTaskFileOpen ? '收起文件' : '展开文件'}</button><span class="tag green">${todayTotal} 项</span></div></div>${dailyTodayViewMode === 'board' ? todayBoard : `<div class="today-task-file-layout ${dailyTaskFileOpen ? '' : 'file-collapsed'}" data-sort-container data-sort-group="daily|${date}|today"><aside class="today-task-list-pane"><div class="today-task-list-head"><span>今日任务</span><span>${todayTaskEntries.length}</span></div><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|today">${todayTaskEntries.map((entry) => dailyTaskListRow(entry.item)).join('') || '<div class="daily-empty">今天还没有任务，先添加一项工作。</div>'}</div></aside><div class="today-task-document-pane">${renderDailyTaskDocument(selectedTask)}</div></div>`}${addRow('today', '记录或安排今天的工作')}`,
+    today: `<div class="daily-panel-head"><div><span class="daily-kicker">LIVE</span><h2>今日工作动态</h2><p>任务文件 · 点击左侧任务查看右侧文档</p></div><div class="daily-panel-tools"><div class="daily-view-switch"><button class="${dailyTodayViewMode === 'list' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="list">文档</button><button class="${dailyTodayViewMode === 'board' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="board">看板</button></div><button class="link-button" data-action="toggle-daily-task-file">${dailyTaskFileOpen ? '收起文件' : '展开文件'}</button><span class="tag green">${todayTotal} 项</span></div></div>${dailyTodayViewMode === 'board' ? `${todayBoard}${addRow('today', '记录或安排今天的工作')}` : `<div class="today-task-file-layout ${dailyTaskFileOpen ? '' : 'file-collapsed'}" data-sort-container data-sort-group="daily|${date}|today"><aside class="today-task-list-pane"><div class="today-task-list-head"><span>今日任务</span><span>${todayTaskEntries.length}</span></div><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|today">${todayTaskEntries.map((entry, index) => dailyTaskListRow(entry.item, index)).join('')}${blankTaskRows}</div></aside><div class="today-task-document-pane">${renderDailyTaskDocument(selectedTask)}</div></div>`}`,
     handoff: `<div class="daily-panel-head"><div><span class="daily-kicker muted-kicker">FROM YESTERDAY</span><h2>昨日写下的今日计划</h2></div><span class="tag">${handoffEntries.length} 项</span></div><div class="handoff-list" data-sort-container data-sort-group="${handoffGroup}">${inheritedRows || '<div class="daily-empty">昨日没有写下今天的计划。</div>'}</div>`,
     tomorrow: `<div class="daily-panel-head"><div><span class="daily-kicker tomorrow-kicker">NEXT</span><h2>明日工作计划</h2></div><span class="tag gold">${tomorrow.slice(5)}</span></div><div class="daily-items" data-sort-container data-sort-group="daily|${date}|tomorrow">${tomorrowBlocks || '<div class="daily-empty compact">先记下明天最重要的一件事。</div>'}</div>${addRow('tomorrow', '添加明天要推进的工作')}`,
     weekly: `<div class="daily-panel-head"><div><span class="daily-kicker week-kicker">WEEK</span><h2>本周计划</h2><p>${weeklyPlan.title || `${weeklyKey} 起`}</p></div><button class="link-button" data-action="open-plan" data-plan-kind="weekly">管理</button></div>${planPreview('weekly', weeklyKey, weeklyPlan)}`,
@@ -685,6 +957,29 @@ function addDailyItem(action) {
   setTimeout(() => document.querySelector(`[data-daily-new="${bucket}"][data-date="${date}"]`)?.focus(), 0);
 }
 
+function commitQuickDailyTask(input, focusNext = false) {
+  if (!input || input.dataset.committing === '1') return false;
+  const text = input.value.trim();
+  if (!text) {
+    if (focusNext) {
+      const nextSlot = Number(input.dataset.quickSlot) + 1;
+      document.querySelector(`[data-daily-quick-task][data-quick-slot="${nextSlot}"]`)?.focus();
+    }
+    return false;
+  }
+  input.dataset.committing = '1';
+  const date = input.dataset.date || selectedDailyDate;
+  const maxOrder = state.tasks.filter((task) => task.date === date).reduce((highest, task) => Math.max(highest, Number(task.order) || 0), 0);
+  const task = makeTaskRecord(text, date, { order: maxOrder + 10 });
+  state.tasks.push(task);
+  selectedDailyTaskId = task.id;
+  localStorage.setItem(userPreferenceKey('performance-selected-daily-task'), selectedDailyTaskId);
+  save();
+  render();
+  if (focusNext) setTimeout(() => document.querySelector('[data-daily-quick-task][data-quick-slot="0"]')?.focus(), 0);
+  return true;
+}
+
 function dailyItemFrom(action) {
   return dailyPlanFor(action.dataset.dailyDate)[action.dataset.dailyBucket].find((item) => item.id === action.dataset.itemId);
 }
@@ -767,9 +1062,155 @@ function renderTasks() {
     </div>`;
 }
 
+function assessmentReviewFor(key, templateId, create = false) {
+  const monthReview = state.monthlyReviews[key] || (create ? (state.monthlyReviews[key] = {}) : {});
+  const reviews = monthReview.assessmentReviews || (create ? (monthReview.assessmentReviews = {}) : {});
+  const review = reviews[templateId] || (create ? (reviews[templateId] = { indicators: {} }) : {});
+  if (create && !review.indicators) review.indicators = {};
+  return review;
+}
+
+function boundedOptionalScore(value, maximum) {
+  if (value === '' || value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  return Math.min(maximum, Math.max(0, Number(value)));
+}
+
+function automaticAssessmentValue(template, indicator, key) {
+  if (template.id !== DEFAULT_TEMPLATE_ID || !indicator.autoSource) return { actualValue: '', score: null };
+  const [year, month] = key.split('-').map(Number);
+  const legacyMonth = calculateMonth(year, month, state);
+  if (indicator.autoSource === 'dailyPerformance') {
+    return { actualValue: legacyMonth.averageDailyPerformance === null ? '' : pct(legacyMonth.averageDailyPerformance), score: legacyMonth.averageDailyPerformance === null ? null : legacyMonth.averageDailyPerformance * indicator.weight / 100 };
+  }
+  const value = boundedOptionalScore(legacyMonth.review?.[indicator.autoSource], 100);
+  return { actualValue: value === null ? '' : `${num(value, 1)} / 100`, score: value === null ? null : value * indicator.weight / 100 };
+}
+
+function assessmentReviewSummary(review, template, key) {
+  const indicators = template.dimensions.flatMap((dimension) => dimension.indicators);
+  const indicatorScore = (indicator) => {
+    const values = review.indicators?.[indicator.id] || {};
+    return boundedOptionalScore(values.finalScore, indicator.weight)
+      ?? boundedOptionalScore(values.supervisorScore, indicator.weight)
+      ?? boundedOptionalScore(values.selfScore, indicator.weight)
+      ?? automaticAssessmentValue(template, indicator, key).score
+      ?? 0;
+  };
+  const maximum = indicators.reduce((sum, indicator) => sum + indicator.weight, 0);
+  const subtotal = Math.min(maximum, indicators.reduce((sum, indicator) => sum + indicatorScore(indicator), 0));
+  const deduction = boundedOptionalScore(review.disciplineDeduction, template.penaltyMax) ?? 0;
+  const legacyBonus = template.id === DEFAULT_TEMPLATE_ID ? boundedOptionalScore(state.monthlyReviews[key]?.innovationBonus, template.bonusMax) : null;
+  const bonus = boundedOptionalScore(review.innovationBonus, template.bonusMax) ?? legacyBonus ?? 0;
+  const total = Math.max(0, subtotal - deduction + bonus);
+  const grade = total >= 95 ? 'S' : total >= 85 ? 'A' : total >= 70 ? 'B' : total >= 60 ? 'C' : 'D';
+  return { indicatorScore, maximum, subtotal, deduction, bonus, total, grade };
+}
+
+function renderAssessmentMonthly(template) {
+  const key = selectedMonthKey();
+  const review = assessmentReviewFor(key, template.id);
+  const summary = assessmentReviewSummary(review, template, key);
+  const scoreInput = (indicator, field, label) => {
+    const value = review.indicators?.[indicator.id]?.[field] ?? '';
+    const fallback = field === 'finalScore' ? summary.indicatorScore(indicator) : '—';
+    return `<input class="input operations-score-input" type="number" min="0" max="${indicator.weight}" step="0.1" aria-label="${label}" data-operations-score="${field}" data-template-id="${template.id}" data-review-month="${key}" data-indicator-id="${indicator.id}" value="${inputValue(value)}" placeholder="${fallback}">`;
+  };
+  const rows = template.dimensions.map((dimension) => dimension.indicators.map((indicator, index) => {
+    const indicatorReview = review.indicators?.[indicator.id] || {};
+    const automatic = automaticAssessmentValue(template, indicator, key);
+    return `<tr>${index === 0 ? `<th class="operations-dimension" rowspan="${dimension.indicators.length}"><strong>${esc(dimension.name)}</strong><span>${dimension.weight}%</span></th>` : ''}<td class="operations-indicator"><strong>${esc(indicator.name)}</strong></td><td class="operations-weight">${indicator.weight}%</td><td class="operations-standard">${esc(indicator.standard)}</td><td><input class="input operations-actual-input" data-operations-score="actualValue" data-template-id="${template.id}" data-review-month="${key}" data-indicator-id="${indicator.id}" value="${inputValue(indicatorReview.actualValue)}" placeholder="${inputValue(automatic.actualValue || '百分比、数量或说明')}"></td><td>${scoreInput(indicator, 'selfScore', '自评得分')}</td><td>${scoreInput(indicator, 'supervisorScore', '上级评分')}</td><td class="operations-final">${scoreInput(indicator, 'finalScore', '最后得分')}<small>采用 ${num(summary.indicatorScore(indicator), 1)}</small></td><td><input class="input operations-note-input" data-operations-score="note" data-template-id="${template.id}" data-review-month="${key}" data-indicator-id="${indicator.id}" value="${inputValue(indicatorReview.note)}" placeholder="备注"></td></tr>`;
+  }).join('')).join('');
+  const monthOptions = Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}" ${currentMonth === index + 1 ? 'selected' : ''}>${currentYear()} 年 ${index + 1} 月</option>`).join('');
+  const penaltyMax = template.penaltyMax ?? 100;
+  const bonusMax = template.bonusMax ?? 10;
+  return `${renderProfileStrip()}<div class="page-head operations-page-head"><div><span class="eyebrow">Monthly Scorecard</span><h1>${esc(template.name)}考核表</h1><p>${esc(activeUser()?.name || '当前用户')} · ${esc(template.role)} · 指标合计 ${summary.maximum} 分，另设扣分与加分项。</p></div><div class="head-controls"><label class="label" for="assessment-month">考核月份</label><select id="assessment-month" class="select" data-month-select>${monthOptions}</select><button class="button primary" data-action="export-json">备份当前数据</button></div></div><div class="operations-summary"><div><span>指标得分</span><strong>${num(summary.subtotal, 1)}</strong><small>/ ${summary.maximum}</small></div><div><span>纪律扣分</span><strong class="negative">-${num(summary.deduction, 1)}</strong></div><div><span>创新加分</span><strong class="positive">+${num(summary.bonus, 1)}</strong></div><div class="total"><span>最终绩效</span><strong>${num(summary.total, 1)}</strong><b>${summary.grade} 级</b></div></div><div class="card operations-scorecard"><div class="task-table-wrap"><table class="operations-table"><thead><tr><th>考核维度</th><th>考核指标</th><th>权重</th><th>评分标准</th><th>实际完成值</th><th>自评得分</th><th>上级评分</th><th>最后得分</th><th>备注</th></tr></thead><tbody>${rows}<tr class="operations-special-row"><th>纪律性及忠诚度</th><td><strong>违法违规、泄密或其他纪律问题</strong></td><td>扣分项</td><td>按事件影响扣分，本项最多扣 ${penaltyMax} 分</td><td colspan="3"><input class="input" data-operations-special="disciplineDeduction" data-template-id="${template.id}" data-review-month="${key}" type="number" min="0" max="${penaltyMax}" step="1" value="${inputValue(review.disciplineDeduction)}" placeholder="填写扣分 0-${penaltyMax}"></td><td><strong>-${num(summary.deduction, 1)}</strong></td><td><input class="input" data-operations-special="disciplineNote" data-template-id="${template.id}" data-review-month="${key}" value="${inputValue(review.disciplineNote)}" placeholder="情况说明"></td></tr><tr class="operations-special-row bonus"><th>积极创新</th><td><strong>管理、业务、产品创新或重大贡献 / 节省成本</strong></td><td>加分项</td><td>按实际价值加分，本项最多加 ${bonusMax} 分</td><td colspan="3"><input class="input" data-operations-special="innovationBonus" data-template-id="${template.id}" data-review-month="${key}" type="number" min="0" max="${bonusMax}" step="0.1" value="${inputValue(review.innovationBonus)}" placeholder="填写加分 0-${bonusMax}"></td><td><strong>+${num(summary.bonus, 1)}</strong></td><td><input class="input" data-operations-special="innovationNote" data-template-id="${template.id}" data-review-month="${key}" value="${inputValue(review.innovationNote)}" placeholder="价值说明"></td></tr></tbody></table></div></div><div class="operations-grade-legend"><span><b>S</b> 95 分及以上</span><span><b>A</b> 85-94 分</span><span><b>B</b> 70-84 分</span><span><b>C</b> 60-69 分</span><span><b>D</b> 60 分以下</span><strong>70 分以下不合格</strong></div>`;
+}
+
 function renderMonthly() {
-  const months = Array.from({ length: 12 }, (_, index) => calculateMonth(currentYear(), index + 1, state));
-  return `<div class="page-head"><div><span class="eyebrow">Monthly Review</span><h1>月度绩效</h1><p>日常表现占 80%，综合素养占 20%，积极创新加分单独计入。</p></div><div class="head-controls"><button class="button primary" data-action="export-json">备份当前数据</button></div></div><div class="card section-card"><div class="task-table-wrap"><table class="monthly-table"><thead><tr><th>月份</th><th>已填写天数</th><th>平均每日绩效</th><th>月度奖励</th><th>协同能力</th><th>忠诚度</th><th>纪律性</th><th>学习力</th><th>综合素养</th><th>最终绩效</th><th>兑现比例</th><th>等级</th><th>备注</th></tr></thead><tbody>${months.map((month) => { const review = state.monthlyReviews[month.key] || {}; return `<tr><td><button class="link-button" data-action="jump-month" data-month="${month.month}">${monthLabel(month.key)}</button></td><td>${month.scoredDays}</td><td>${pct(month.averageDailyPerformance)}</td><td>${num(month.monthlyReward)}</td>${['collaboration', 'loyalty', 'discipline', 'learning'].map((field) => `<td><input class="input" type="number" min="0" max="100" data-review="${field}" data-review-month="${month.key}" value="${inputValue(review[field])}" placeholder="—"></td>`).join('')}<td>${num(month.competencyScore)}</td><td><strong>${num(month.finalPerformance)}</strong></td><td>${month.payoutRatio === null ? '—' : pct(month.payoutRatio * 100)}</td><td>${month.grade || '—'}</td><td><input class="input" data-review="note" data-review-month="${month.key}" value="${inputValue(review.note)}" placeholder="备注"></td></tr>`; }).join('')}</tbody></table></div></div><div class="notice" style="margin-top:16px">月度奖励总分只有在最终绩效达到 100 分时兑现；积极创新加分由负责人结合任务创新分和实际价值核定，最高 ${state.settings.monthlyInnovationMax} 分。</div>`;
+  return renderAssessmentMonthly(assessmentTemplate(activeUser()?.assessmentTemplateId));
+}
+
+function makeTemplateIndicator(indicator = {}) {
+  return { id: String(indicator.id || crypto.randomUUID()), name: String(indicator.name || ''), weight: indicator.weight ?? '', standard: String(indicator.standard || '') };
+}
+
+function makeTemplateDimension(dimension = {}) {
+  const indicators = Array.isArray(dimension.indicators) && dimension.indicators.length ? dimension.indicators.map(makeTemplateIndicator) : [makeTemplateIndicator()];
+  return { name: String(dimension.name || ''), indicators };
+}
+
+function templateEditorTotalWeight() {
+  return editingTemplateDimensions.reduce((total, dimension) => total + dimension.indicators.reduce((sum, indicator) => sum + (Number(indicator.weight) || 0), 0), 0);
+}
+
+function syncTemplateEditorWeight() {
+  const node = $('#template-total-weight');
+  if (!node) return;
+  const total = templateEditorTotalWeight();
+  node.textContent = `${num(total, 1)} / 100`;
+  node.classList.toggle('valid', Math.abs(total - 100) < 0.001);
+}
+
+function renderTemplateDimensionsEditor() {
+  const root = $('#template-dimensions-editor');
+  if (!root) return;
+  root.innerHTML = editingTemplateDimensions.map((dimension, dimensionIndex) => {
+    const weight = dimension.indicators.reduce((sum, indicator) => sum + (Number(indicator.weight) || 0), 0);
+    return `<section class="template-builder-dimension"><div class="template-builder-dimension-head"><span class="template-builder-index">${dimensionIndex + 1}</span><input class="input" data-template-dimension-field="name" data-dimension-index="${dimensionIndex}" value="${inputValue(dimension.name)}" placeholder="维度名称，例如：销售业绩管理"><strong>${num(weight, 1)}%</strong><button type="button" class="icon-button template-builder-remove" data-action="remove-template-dimension" data-dimension-index="${dimensionIndex}" aria-label="删除维度">×</button></div><div class="template-builder-indicators">${dimension.indicators.map((indicator, indicatorIndex) => `<div class="template-builder-indicator"><input class="input" data-template-indicator-field="name" data-dimension-index="${dimensionIndex}" data-indicator-index="${indicatorIndex}" value="${inputValue(indicator.name)}" placeholder="考核指标"><label><input class="input" type="number" min="0.1" max="100" step="0.1" data-template-indicator-field="weight" data-dimension-index="${dimensionIndex}" data-indicator-index="${indicatorIndex}" value="${inputValue(indicator.weight)}" placeholder="权重"><span>%</span></label><input class="input" data-template-indicator-field="standard" data-dimension-index="${dimensionIndex}" data-indicator-index="${indicatorIndex}" value="${inputValue(indicator.standard)}" placeholder="评分标准"><button type="button" class="icon-button template-builder-remove" data-action="remove-template-indicator" data-dimension-index="${dimensionIndex}" data-indicator-index="${indicatorIndex}" aria-label="删除指标">×</button></div>`).join('')}</div><button type="button" class="button ghost template-builder-add" data-action="add-template-indicator" data-dimension-index="${dimensionIndex}">+ 添加考核指标</button></section>`;
+  }).join('');
+  syncTemplateEditorWeight();
+}
+
+function openAssessmentTemplateDialog(templateId = '', duplicate = false) {
+  const source = templateId ? assessmentTemplate(templateId) : null;
+  const editableSource = source && !source.builtIn && !duplicate;
+  editingAssessmentTemplateId = editableSource ? source.id : null;
+  editingTemplateDimensions = (source?.dimensions || [makeTemplateDimension()]).map(makeTemplateDimension);
+  $('#template-dialog-title').textContent = editableSource ? '编辑绩效模板' : (source ? '复制绩效模板' : '新增绩效模板');
+  $('#template-form-fields').innerHTML = `<div class="template-builder-basics"><label class="form-field"><span class="label">模板名称 *</span><input class="input" name="name" maxlength="50" required value="${inputValue(source ? `${source.name}${duplicate ? ' 副本' : ''}` : '')}" placeholder="例如：销售经理月度绩效"></label><label class="form-field"><span class="label">适用岗位 *</span><input class="input" name="role" maxlength="40" required value="${inputValue(source?.role)}" placeholder="例如：销售经理"></label><label class="form-field full"><span class="label">模板说明</span><input class="input" name="description" maxlength="160" value="${inputValue(source?.description)}" placeholder="简要说明考核重点"></label><label class="form-field"><span class="label">纪律扣分上限</span><input class="input" name="penaltyMax" type="number" min="0" max="100" value="${inputValue(source?.penaltyMax ?? 100)}"></label><label class="form-field"><span class="label">创新加分上限</span><input class="input" name="bonusMax" type="number" min="0" max="100" value="${inputValue(source?.bonusMax ?? 10)}"></label></div><div class="template-builder-title"><div><strong>考核维度与指标</strong><small>维度权重由其指标权重自动合计</small></div><span>总权重 <b id="template-total-weight">0 / 100</b></span></div><div id="template-dimensions-editor"></div><button type="button" class="button template-add-dimension" data-action="add-template-dimension">+ 添加考核维度</button>`;
+  renderTemplateDimensionsEditor();
+  $('#template-dialog').showModal();
+  $('#template-form [name="name"]')?.focus();
+}
+
+function closeAssessmentTemplateDialog() {
+  editingAssessmentTemplateId = null;
+  editingTemplateDimensions = [];
+  $('#template-dialog').close();
+}
+
+function saveAssessmentTemplateFromDialog() {
+  const data = Object.fromEntries(new FormData($('#template-form')).entries());
+  const name = String(data.name || '').trim();
+  const role = String(data.role || '').trim();
+  if (!name || !role) return toast('请填写模板名称和适用岗位');
+  if (ASSESSMENT_TEMPLATES.some((template) => template.id !== editingAssessmentTemplateId && template.name.toLowerCase() === name.toLowerCase())) return toast('已存在同名模板');
+  if (editingTemplateDimensions.some((dimension) => !dimension.name.trim() || !dimension.indicators.length || dimension.indicators.some((indicator) => !indicator.name.trim() || !(Number(indicator.weight) > 0)))) return toast('请完整填写维度、指标和权重');
+  const totalWeight = templateEditorTotalWeight();
+  if (Math.abs(totalWeight - 100) >= 0.001) return toast(`当前总权重为 ${num(totalWeight, 1)}%，请调整为 100%`);
+  const template = normalizeAssessmentTemplate({
+    id: editingAssessmentTemplateId || `custom-${crypto.randomUUID()}`,
+    name,
+    role,
+    description: data.description,
+    penaltyMax: data.penaltyMax,
+    bonusMax: data.bonusMax,
+    dimensions: editingTemplateDimensions,
+  });
+  if (!template) return toast('模板内容不完整');
+  const existingIndex = customAssessmentTemplates.findIndex((item) => item.id === template.id);
+  if (existingIndex >= 0) customAssessmentTemplates[existingIndex] = template; else customAssessmentTemplates.push(template);
+  saveAssessmentTemplateLibrary();
+  closeAssessmentTemplateDialog();
+  render();
+  toast(existingIndex >= 0 ? '绩效模板已更新' : '绩效模板已添加，可分配给人员');
+}
+
+function renderTemplateLibrary() {
+  return `<section class="template-library"><div class="section-title"><div><h2>绩效模板库</h2><p>所有模板统一使用月度考核表，可在用户资料或页面顶部为每个人分配。</p></div><div class="template-library-actions"><span class="tag green">${ASSESSMENT_TEMPLATES.length} 套模板</span><button class="button primary" data-action="add-assessment-template">+ 新增模板</button></div></div><div class="template-grid">${ASSESSMENT_TEMPLATES.map((template) => {
+    const assigned = users.filter((user) => assessmentTemplate(user.assessmentTemplateId).id === template.id);
+    return `<article class="card template-card ${template.id === activeUser()?.assessmentTemplateId ? 'active' : ''}"><div class="template-card-head"><div><span class="template-role">${esc(template.role)}</span><h3>${esc(template.name)}</h3></div><span class="template-assigned">${assigned.length} 人使用</span></div><p>${esc(template.description)}</p><div class="template-dimensions">${template.dimensions.map((dimension) => `<details><summary><span>${esc(dimension.name)}</span><strong>${dimension.weight}%</strong></summary><ul>${dimension.indicators.map((indicator) => `<li><span><strong>${esc(indicator.name)}</strong><small>${esc(indicator.standard)}</small></span><b>${indicator.weight}%</b></li>`).join('')}</ul></details>`).join('')}</div><div class="template-card-foot"><div class="template-people">${assigned.length ? assigned.map((user) => `<span>${esc(user.name)}</span>`).join('') : '<small>尚未分配人员</small>'}</div><button class="link-button" data-action="${template.builtIn ? 'duplicate-assessment-template' : 'edit-assessment-template'}" data-template-id="${template.id}">${template.builtIn ? '复制为新模板' : '编辑模板'}</button></div></article>`;
+  }).join('')}</div></section>`;
 }
 
 function renderSettings() {
@@ -989,10 +1430,38 @@ async function importExcel(file) {
 }
 
 function download(name, blob) { const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
-function exportJson() { download('绩效考核备份.json', new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })); toast('JSON 备份已生成'); }
-async function exportExcel() { const response = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state) }); if (!response.ok) { toast('Excel 导出失败'); return; } download('绩效考核归档.xlsx', await response.blob()); toast('Excel 归档已生成'); }
+function currentUserFilePrefix() { return (activeUser()?.name || '默认用户').replace(/[\\/:*?"<>|]/g, '-'); }
+function exportJson() { download(`${currentUserFilePrefix()}-绩效考核备份.json`, new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })); toast('当前用户的 JSON 备份已生成'); }
+async function exportExcel() { const response = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state) }); if (!response.ok) { toast('Excel 导出失败'); return; } download(`${currentUserFilePrefix()}-绩效考核归档.xlsx`, await response.blob()); toast('当前用户的 Excel 归档已生成'); }
+
+function persistOperationsInput(target) {
+  if (target.matches('[data-operations-score]')) {
+    const template = assessmentTemplate(target.dataset.templateId);
+    const review = assessmentReviewFor(target.dataset.reviewMonth, template.id, true);
+    const indicator = template.dimensions.flatMap((dimension) => dimension.indicators).find((item) => item.id === target.dataset.indicatorId);
+    if (!indicator) return false;
+    const values = review.indicators[indicator.id] || (review.indicators[indicator.id] = {});
+    const field = target.dataset.operationsScore;
+    values[field] = ['actualValue', 'note'].includes(field) ? target.value : (target.value === '' ? '' : Math.min(indicator.weight, Math.max(0, Number(target.value) || 0)));
+    save();
+    return true;
+  }
+  if (target.matches('[data-operations-special]')) {
+    const template = assessmentTemplate(target.dataset.templateId);
+    const review = assessmentReviewFor(target.dataset.reviewMonth, template.id, true);
+    const field = target.dataset.operationsSpecial;
+    const maximum = field === 'innovationBonus' ? template.bonusMax : template.penaltyMax;
+    review[field] = field.endsWith('Note') ? target.value : (target.value === '' ? '' : Math.min(maximum, Math.max(0, Number(target.value) || 0)));
+    save();
+    return true;
+  }
+  return false;
+}
 
 document.addEventListener('click', (event) => {
+  if (userMenuOpen && !event.target.closest('.user-switcher')) { userMenuOpen = false; renderUserSwitcher(); }
+  const blankTaskRow = event.target.closest('.today-task-blank-row');
+  if (blankTaskRow && !event.target.matches('[data-daily-quick-task]')) { blankTaskRow.querySelector('[data-daily-quick-task]')?.focus(); return; }
   const nav = event.target.closest('[data-tab]'); if (nav) return setActiveTab(nav.dataset.tab);
   const monthSelect = event.target.closest('[data-month-select]'); if (monthSelect) return;
   const day = event.target.closest('[data-day]'); if (day) { selectedDate = day.dataset.day; render(); return; }
@@ -1000,6 +1469,36 @@ document.addEventListener('click', (event) => {
   const type = action.dataset.action;
   const panel = action.closest('[data-daily-panel]');
   if (panel?.classList.contains('is-frozen') && !['toggle-daily-panel-freeze', 'toggle-daily-item', 'toggle-daily-task', 'toggle-daily-task-next', 'toggle-plan-item', 'toggle-task-subtask', 'daily-view-mode'].includes(type)) return;
+  if (type === 'toggle-user-menu') { userMenuOpen = !userMenuOpen; renderUserSwitcher(); return; }
+  if (type === 'switch-user') return switchUser(action.dataset.userId);
+  if (type === 'add-user') return openUserDialog();
+  if (type === 'edit-user') return openUserDialog(action.dataset.userId);
+  if (type === 'cancel-user') return closeUserDialog();
+  if (type === 'delete-user') return deleteUser(action.dataset.userId);
+  if (type === 'add-assessment-template') return openAssessmentTemplateDialog();
+  if (type === 'edit-assessment-template') return openAssessmentTemplateDialog(action.dataset.templateId);
+  if (type === 'duplicate-assessment-template') return openAssessmentTemplateDialog(action.dataset.templateId, true);
+  if (type === 'cancel-assessment-template') return closeAssessmentTemplateDialog();
+  if (type === 'add-template-dimension') { editingTemplateDimensions.push(makeTemplateDimension()); renderTemplateDimensionsEditor(); return; }
+  if (type === 'remove-template-dimension') {
+    if (editingTemplateDimensions.length <= 1) return toast('模板至少需要一个考核维度');
+    editingTemplateDimensions.splice(Number(action.dataset.dimensionIndex), 1);
+    renderTemplateDimensionsEditor();
+    return;
+  }
+  if (type === 'add-template-indicator') {
+    editingTemplateDimensions[Number(action.dataset.dimensionIndex)]?.indicators.push(makeTemplateIndicator());
+    renderTemplateDimensionsEditor();
+    return;
+  }
+  if (type === 'remove-template-indicator') {
+    const dimension = editingTemplateDimensions[Number(action.dataset.dimensionIndex)];
+    if (!dimension) return;
+    if (dimension.indicators.length <= 1) return toast('每个维度至少需要一个考核指标');
+    dimension.indicators.splice(Number(action.dataset.indicatorIndex), 1);
+    renderTemplateDimensionsEditor();
+    return;
+  }
   if (type === 'toggle-sidebar') { sidebarCollapsed = !sidebarCollapsed; localStorage.setItem('performance-sidebar-collapsed', sidebarCollapsed ? '1' : '0'); render(); return; }
   if (type === 'add-task') return addInlineTask();
   if (type === 'add-daily-item') return addDailyItem(action);
@@ -1015,19 +1514,19 @@ document.addEventListener('click', (event) => {
   if (type === 'toggle-block-freeze') return toggleBlockFreeze(action);
   if (type === 'toggle-daily-panel-freeze') return toggleDailyPanelFreeze(action);
   if (type === 'daily-layout-preset') return applyDailyLayoutPreset(action.dataset.layoutPreset);
-  if (type === 'daily-view-mode') { dailyTodayViewMode = action.dataset.viewMode === 'board' ? 'board' : 'list'; localStorage.setItem('performance-daily-view-mode', dailyTodayViewMode); render(); return; }
+  if (type === 'daily-view-mode') { dailyTodayViewMode = action.dataset.viewMode === 'board' ? 'board' : 'list'; localStorage.setItem(userPreferenceKey('performance-daily-view-mode'), dailyTodayViewMode); render(); return; }
   if (type === 'select-daily-task') {
     const nextId = action.dataset.id || '';
     dailyTaskFileOpen = selectedDailyTaskId === nextId ? !dailyTaskFileOpen : true;
     selectedDailyTaskId = nextId;
-    localStorage.setItem('performance-selected-daily-task', selectedDailyTaskId);
-    localStorage.setItem('performance-daily-task-file-open', dailyTaskFileOpen ? '1' : '0');
+    localStorage.setItem(userPreferenceKey('performance-selected-daily-task'), selectedDailyTaskId);
+    localStorage.setItem(userPreferenceKey('performance-daily-task-file-open'), dailyTaskFileOpen ? '1' : '0');
     render();
     return;
   }
   if (type === 'toggle-daily-task-file') {
     dailyTaskFileOpen = !dailyTaskFileOpen;
-    localStorage.setItem('performance-daily-task-file-open', dailyTaskFileOpen ? '1' : '0');
+    localStorage.setItem(userPreferenceKey('performance-daily-task-file-open'), dailyTaskFileOpen ? '1' : '0');
     render();
     return;
   }
@@ -1112,13 +1611,52 @@ document.addEventListener('change', async (event) => {
   if (target.matches('[data-plan-date]')) { selectedPlanDate = target.type === 'month' ? `${target.value}-01` : target.value; render(); return; }
   if (target.matches('[data-plan-field]')) { updatePlanField(target); return; }
   if (target.matches('[data-plan-item-field]')) { updatePlanItem(target); return; }
+  if (target.matches('[data-user-template]')) {
+    const user = activeUser();
+    if (user) {
+      user.assessmentTemplateId = assessmentTemplate(target.value).id;
+      saveUserDirectory();
+      render();
+      toast(`已为 ${user.name} 分配“${assessmentTemplate(user.assessmentTemplateId).name}”`);
+    }
+    return;
+  }
   if (target.matches('[data-profile]')) { state.profile[target.dataset.profile] = target.dataset.profile === 'year' ? Number(target.value) : target.value; save(); render(); return; }
   if (target.matches('[data-setting]')) { const key = target.dataset.setting; const value = Number(target.value); if (key.startsWith('gradeThresholds.')) state.settings.gradeThresholds[key.split('.')[1]] = value; else state.settings[key] = value; if (key === 'standardDayHours' && Number.isFinite(value) && value > 0) state.settings.baseRewardPerHour = 100 / value; save(); render(); return; }
+  if (persistOperationsInput(target)) { render(); return; }
   if (target.matches('[data-review]')) { const key = target.dataset.reviewMonth; state.monthlyReviews[key] = { ...(state.monthlyReviews[key] || {}), [target.dataset.review]: target.dataset.review === 'note' ? target.value : formNumber('selfScore', target.value) }; save(); render(); }
 });
 
-document.addEventListener('blur', (event) => { if (event.target.matches('[data-task-field]')) updateTaskField(event.target); }, true);
-document.addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.matches('[data-daily-new]')) { event.preventDefault(); document.querySelector(`[data-action="add-daily-item"][data-daily-date="${event.target.dataset.date}"][data-daily-bucket="${event.target.dataset.dailyNew}"]`)?.click(); } });
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target.matches('[data-template-dimension-field]')) {
+    const dimension = editingTemplateDimensions[Number(target.dataset.dimensionIndex)];
+    if (dimension) dimension[target.dataset.templateDimensionField] = target.value;
+    return;
+  }
+  if (target.matches('[data-template-indicator-field]')) {
+    const dimensionIndex = Number(target.dataset.dimensionIndex);
+    const indicator = editingTemplateDimensions[dimensionIndex]?.indicators[Number(target.dataset.indicatorIndex)];
+    if (indicator) indicator[target.dataset.templateIndicatorField] = target.value;
+    syncTemplateEditorWeight();
+    const dimensionNode = target.closest('.template-builder-dimension');
+    if (dimensionNode && editingTemplateDimensions[dimensionIndex]) {
+      const weight = editingTemplateDimensions[dimensionIndex].indicators.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
+      dimensionNode.querySelector('.template-builder-dimension-head > strong').textContent = `${num(weight, 1)}%`;
+    }
+    return;
+  }
+  persistOperationsInput(target);
+});
+document.addEventListener('blur', (event) => {
+  if (event.target.matches('[data-task-field]')) updateTaskField(event.target);
+  if (event.target.matches('[data-daily-quick-task]')) commitQuickDailyTask(event.target);
+}, true);
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.isComposing) return;
+  if (event.target.matches('[data-daily-quick-task]')) { event.preventDefault(); commitQuickDailyTask(event.target, true); return; }
+  if (event.target.matches('[data-daily-new]')) { event.preventDefault(); document.querySelector(`[data-action="add-daily-item"][data-daily-date="${event.target.dataset.date}"][data-daily-bucket="${event.target.dataset.dailyNew}"]`)?.click(); }
+});
 document.addEventListener('dragstart', (event) => {
   const block = event.target.closest('[data-sortable-block]');
   if (!block) return;
@@ -1305,6 +1843,8 @@ document.addEventListener('pointercancel', () => {
   document.body.classList.remove('resizing-daily-row');
 });
 $('#summary-item-form').addEventListener('submit', (event) => { event.preventDefault(); saveSummaryItem(); });
+$('#user-form').addEventListener('submit', (event) => { event.preventDefault(); saveUserFromDialog(); });
+$('#template-form').addEventListener('submit', (event) => { event.preventDefault(); saveAssessmentTemplateFromDialog(); });
 
 function updateTaskField(target) {
   const task = taskForId(target.dataset.taskId); if (!task) return;
