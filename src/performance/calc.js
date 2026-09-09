@@ -1,5 +1,56 @@
+/* eslint-disable */
 export const PLAN_TYPES = ['单人工作', '协同工作', '拓展工作', '加班工作'];
 export const TASK_CATEGORIES = ['Bug 修复', '文档撰写', '需求开发', '学习培训', '会议沟通', '产品设计', '项目管理', '测试验收', '协作工作', '其他'];
+
+export const DEFAULT_FIELD_CONFIGS = [
+  // 任务池专用字段
+  { key: 'title', label: '事项名称', scope: 'pool', required: true, visible: true, defaultValue: '' },
+  { key: 'description', label: '事项说明', scope: 'pool', required: false, visible: true, defaultValue: '' },
+  { key: 'priority', label: '优先级', scope: 'pool', required: true, visible: true, defaultValue: '普通' },
+  { key: 'dueDate', label: '截止日期', scope: 'pool', required: false, visible: true, defaultValue: '' },
+  { key: 'status', label: '状态', scope: 'pool', required: true, visible: true, defaultValue: 'todo' },
+  { key: 'reviewer', label: '验收人', scope: 'pool', required: false, visible: true, defaultValue: '' },
+  // 任务文件专用字段
+  { key: 'content', label: '任务内容', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'estimatedHours', label: '预计工时', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'actualHours', label: '实际工时', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'completionPct', label: '交付完成', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'collaborationPct', label: '协作完成', scope: 'task', required: false, visible: false, defaultValue: '' },
+  { key: 'innovation', label: '创新分', scope: 'task', required: false, visible: false, defaultValue: '' },
+  { key: 'selfScore', label: '自评分', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'reviewerScore', label: '负责人评分', scope: 'task', required: true, visible: true, defaultValue: '' },
+  { key: 'blocker', label: '阻塞问题/备注', scope: 'task', required: false, visible: true, defaultValue: '' },
+  { key: 'breakthrough', label: '重大突破', scope: 'task', required: false, visible: true, defaultValue: '' },
+  // 共用字段
+  { key: 'date', label: '日期', scope: 'both', required: true, visible: true, defaultValue: '' },
+  { key: 'category', label: '分类', scope: 'both', required: true, visible: true, defaultValue: '其他' },
+  { key: 'planType', label: '计划类型', scope: 'both', required: true, visible: true, defaultValue: '单人工作' },
+  { key: 'collaborator', label: '协作人', scope: 'both', required: false, visible: false, defaultValue: '' },
+];
+
+function migrateFieldConfigs(stored) {
+  if (!Array.isArray(stored)) return DEFAULT_FIELD_CONFIGS.map((c) => ({ ...c }));
+  const merged = [];
+  const seen = new Set();
+  for (const item of stored) {
+    if (!item || typeof item !== 'object') continue;
+    const base = DEFAULT_FIELD_CONFIGS.find((c) => c.key === item.key);
+    if (!base) continue;
+    merged.push({
+      key: base.key,
+      label: String(item.label || base.label),
+      scope: ['pool', 'task', 'both'].includes(item.scope) ? item.scope : base.scope,
+      required: item.required !== undefined ? Boolean(item.required) : base.required,
+      visible: item.visible !== undefined ? Boolean(item.visible) : base.visible,
+      defaultValue: String(item.defaultValue !== undefined ? item.defaultValue : base.defaultValue),
+    });
+    seen.add(base.key);
+  }
+  for (const base of DEFAULT_FIELD_CONFIGS) {
+    if (!seen.has(base.key)) merged.push({ ...base });
+  }
+  return merged;
+}
 
 export const DEFAULT_STATE = {
   version: 2,
@@ -17,6 +68,7 @@ export const DEFAULT_STATE = {
     competencyWeight: 0.2,
     taskCategories: [...TASK_CATEGORIES],
     gradeThresholds: { S: 90, A: 80, B: 70, C: 60 },
+    fieldConfigs: DEFAULT_FIELD_CONFIGS.map((c) => ({ ...c })),
   },
   calendarOverrides: {},
   tasks: [],
@@ -24,6 +76,11 @@ export const DEFAULT_STATE = {
   dailyPlans: {},
   plans: { weekly: {}, monthly: {} },
   monthlyReviews: {},
+  notifications: [],
+  messages: [],
+  documentTree: [],
+  projects: [],
+  sopTemplates: [],
 };
 
 const numberOrNull = (value) => {
@@ -178,23 +235,117 @@ export function validateState(state) {
   return errors;
 }
 
+function normalizeSopTemplate(template) {
+  return {
+    id: template.id || crypto.randomUUID(),
+    name: template.name || '',
+    scene: template.scene || '',
+    defaultOwnerRole: template.defaultOwnerRole || '',
+    defaultReviewerRole: template.defaultReviewerRole || '',
+    standardDuration: template.standardDuration ?? '',
+    nodes: Array.isArray(template.nodes) ? template.nodes.map((node) => ({
+      id: node.id || crypto.randomUUID(),
+      input: node.input || '',
+      action: node.action || '',
+      output: node.output || '',
+      acceptance: node.acceptance || '',
+      next: node.next || '',
+      ...(Number.isFinite(Number(node.order)) ? { order: Number(node.order) } : {}),
+    })).filter((node) => node.id) : [],
+    createdAt: template.createdAt || new Date().toISOString(),
+    ...(Number.isFinite(Number(template.order)) ? { order: Number(template.order) } : {}),
+  };
+}
+
+function normalizeProjectTask(task) {
+  return {
+    id: task.id || crypto.randomUUID(),
+    title: task.title || '',
+    assignee: task.assignee || '',
+    reviewer: task.reviewer || '',
+    dueDate: dateToISO(task.dueDate),
+    status: ['todo', 'doing', 'done'].includes(task.status) ? task.status : 'todo',
+    priority: task.priority || '普通',
+    workItemId: task.workItemId || '',
+    performanceTaskId: task.performanceTaskId || '',
+    predecessors: Array.isArray(task.predecessors) ? task.predecessors.filter((id) => id) : [],
+    requirement: task.requirement || '',
+    acceptance: task.acceptance || '',
+    deliverables: Array.isArray(task.deliverables) ? task.deliverables.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done) })) : [],
+    comments: Array.isArray(task.comments) ? task.comments.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', author: item.author || '', createdAt: item.createdAt || '' })) : [],
+    blocked: Boolean(task.blocked),
+    blockedReason: task.blockedReason || '',
+    acceptanceStatus: task.acceptanceStatus || '',
+    subtasks: Array.isArray(task.subtasks) ? task.subtasks.map(normalizeProjectTask).filter((t) => t.id) : [],
+    ...(Number.isFinite(Number(task.order)) ? { order: Number(task.order) } : {}),
+  };
+}
+
 export function normalizeState(input) {
   const state = structuredClone(DEFAULT_STATE);
   if (!input || typeof input !== 'object') return state;
   state.profile = { ...state.profile, ...(input.profile || {}) };
-  state.settings = { ...state.settings, ...(input.settings || {}), gradeThresholds: { ...state.settings.gradeThresholds, ...(input.settings?.gradeThresholds || {}) }, taskCategories: Array.isArray(input.settings?.taskCategories) && input.settings.taskCategories.length ? [...new Set(input.settings.taskCategories.map((value) => String(value).trim()).filter(Boolean))] : [...TASK_CATEGORIES] };
+  state.settings = {
+    ...state.settings,
+    ...(input.settings || {}),
+    gradeThresholds: { ...state.settings.gradeThresholds, ...(input.settings?.gradeThresholds || {}) },
+    taskCategories: Array.isArray(input.settings?.taskCategories) && input.settings.taskCategories.length
+      ? [...new Set(input.settings.taskCategories.map((value) => String(value).trim()).filter(Boolean))]
+      : [...TASK_CATEGORIES],
+    fieldConfigs: migrateFieldConfigs(input.settings?.fieldConfigs),
+  };
   state.calendarOverrides = { ...(input.calendarOverrides || {}) };
   state.tasks = Array.isArray(input.tasks) ? input.tasks.map((task) => ({
     id: task.id || crypto.randomUUID(), date: dateToISO(task.date), content: task.content || '', body: task.body || '', category: task.category || '其他', planType: task.planType || '单人工作', collaborator: task.collaborator || '', estimatedHours: task.estimatedHours ?? '', actualHours: task.actualHours ?? '', completionPct: task.completionPct ?? '', collaborationPct: task.collaborationPct ?? '', innovation: task.innovation ?? '', selfScore: task.selfScore ?? '', reviewerScore: task.reviewerScore ?? '', nextPlan: task.nextPlan || '', blocker: task.blocker || '', breakthrough: task.breakthrough || '', subtasks: Array.isArray(task.subtasks) ? task.subtasks.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done) })) : [], ...(Number.isFinite(Number(task.order)) ? { order: Number(task.order) } : {}), ...(Number.isFinite(Number(task.nextPlanOrder)) ? { nextPlanOrder: Number(task.nextPlanOrder) } : {}), ...(task.nextPlanDone ? { nextPlanDone: true } : {}), ...(task.sourceDailyItemId ? { sourceDailyItemId: task.sourceDailyItemId } : {}), ...(task.frozen ? { frozen: true } : {}), ...(task.nextPlanFrozen ? { nextPlanFrozen: true } : {}),
   })) : [];
   state.workItems = Array.isArray(input.workItems) ? input.workItems.map((item) => ({
-    id: item.id || crypto.randomUUID(), title: item.title || '', description: item.description || '', category: item.category || state.settings.taskCategories[0] || '其他', planType: item.planType || '单人工作', priority: item.priority || '普通', dueDate: dateToISO(item.dueDate), status: item.status || 'todo', reviewer: item.reviewer || '', acceptanceStatus: item.acceptanceStatus || '', performanceTaskId: item.performanceTaskId || '', createdAt: item.createdAt || new Date().toISOString(), completedAt: item.completedAt || '', ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}),
+    id: item.id || crypto.randomUUID(), title: item.title || '', description: item.description || '', category: item.category || state.settings.taskCategories[0] || '其他', planType: item.planType || '单人工作', priority: item.priority || '普通', dueDate: dateToISO(item.dueDate), status: item.status || 'todo', reviewer: item.reviewer || '', acceptanceStatus: item.acceptanceStatus || '', performanceTaskId: item.performanceTaskId || '', createdAt: item.createdAt || new Date().toISOString(), completedAt: item.completedAt || '', owner: item.owner || '', ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}),
   })) : [];
   state.dailyPlans = Object.fromEntries(Object.entries(input.dailyPlans || {}).map(([date, plan]) => [dateToISO(date), {
-    today: Array.isArray(plan?.today) ? plan.today.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done), ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}), ...(item.frozen ? { frozen: true } : {}) })) : [],
-    tomorrow: Array.isArray(plan?.tomorrow) ? plan.tomorrow.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done), ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}), ...(item.frozen ? { frozen: true } : {}) })) : [],
+    today: Array.isArray(plan?.today) ? plan.today.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done), ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}), ...(item.frozen ? { frozen: true } : {}), ...(item.linkRef ? { linkRef: item.linkRef } : {}) })) : [],
+    tomorrow: Array.isArray(plan?.tomorrow) ? plan.tomorrow.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done), ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}), ...(item.frozen ? { frozen: true } : {}), ...(item.linkRef ? { linkRef: item.linkRef } : {}) })) : [],
   }]).filter(([date]) => date));
   state.plans = { weekly: { ...(input.plans?.weekly || {}) }, monthly: { ...(input.plans?.monthly || {}) } };
   state.monthlyReviews = { ...(input.monthlyReviews || {}) };
+  state.notifications = Array.isArray(input.notifications) ? input.notifications : [];
+  state.messages = Array.isArray(input.messages) ? input.messages : [];
+  state.documentTree = Array.isArray(input.documentTree) ? input.documentTree.map((node) => ({
+    id: node.id || crypto.randomUUID(),
+    kind: node.kind === 'folder' ? 'folder' : 'doc',
+    title: node.title || '',
+    parentId: node.parentId || null,
+    body: node.body || '',
+    createdAt: node.createdAt || new Date().toISOString(),
+    updatedAt: node.updatedAt || '',
+    ...(Number.isFinite(Number(node.order)) ? { order: Number(node.order) } : {}),
+  })).filter((node) => node.id) : [];
+  state.projects = Array.isArray(input.projects) ? input.projects.map((project) => ({
+    id: project.id || crypto.randomUUID(),
+    name: project.name || '',
+    description: project.description || '',
+    category: project.category || '项目管理',
+    stage: String(project.stage || (project.status === 'doing' ? '开发执行' : project.status === 'done' ? '已交付' : '规划立项') || '规划立项'),
+    priority: project.priority || '普通',
+    status: project.status || 'todo',
+    riskOverride: project.riskOverride || '',
+    owner: project.owner || '',
+    startDate: dateToISO(project.startDate),
+    dueDate: dateToISO(project.dueDate),
+    taskIds: Array.isArray(project.taskIds) ? project.taskIds.filter((id) => id) : [],
+    milestones: Array.isArray(project.milestones) ? project.milestones.map((milestone) => ({
+      id: milestone.id || crypto.randomUUID(),
+      name: milestone.name || '',
+      description: milestone.description || '',
+      dueDate: dateToISO(milestone.dueDate),
+      status: ['todo', 'doing', 'done'].includes(milestone.status) ? milestone.status : 'todo',
+      owner: milestone.owner || '',
+      reviewer: milestone.reviewer || '',
+      ...(Number.isFinite(Number(milestone.order)) ? { order: Number(milestone.order) } : {}),
+      tasks: Array.isArray(milestone.tasks) ? milestone.tasks.map(normalizeProjectTask).filter((task) => task.id) : [],
+    })).filter((milestone) => milestone.id) : [],
+    createdAt: project.createdAt || new Date().toISOString(),
+    ...(Number.isFinite(Number(project.order)) ? { order: Number(project.order) } : {}),
+  })).filter((project) => project.id) : [];
+  state.sopTemplates = Array.isArray(input.sopTemplates) ? input.sopTemplates.map(normalizeSopTemplate).filter((template) => template.id) : [];
   return state;
 }

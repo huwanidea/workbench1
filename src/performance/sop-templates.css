@@ -1,0 +1,71 @@
+/* ===== SOP 项目模板 ===== */
+.sop-view { padding: 26px 30px 46px; min-height: calc(100vh - 56px); }
+
+.sop-stat-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+.sop-stat { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid #e8efed; border-radius: 12px; background: #ffffff; }
+.sop-stat-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; background: #e2f7f2; color: #0e7a6a; }
+.sop-stat-icon i { font-size: 18px; line-height: 1; }
+.sop-stat > div { display: grid; gap: 2px; }
+.sop-stat strong { color: #172033; font-size: 20px; font-weight: 780; line-height: 1.1; }
+.sop-stat small { color: #8a9a96; font-size: 11px; }
+
+.sop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.sop-card { display: flex; flex-direction: column; border: 1px solid #e8efed; border-radius: 12px; background: #ffffff; padding: 16px 18px; transition: border-color 120ms ease; }
+.sop-card:hover { border-color: #c9ddd9; }
+.sop-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sop-card-head > div { min-width: 0; }
+.sop-scene { display: inline-block; padding: 2px 9px; border-radius: 999px; background: #fff5d9; color: #a06b17; font-size: 10px; font-weight: 700; }
+.sop-card-head h3 { margin: 8px 0 0; color: #172033; font-size: 16px; font-weight: 750; letter-spacing: -0.2px; }
+.sop-node-count { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; background: #e2f7f2; color: #0e7a6a; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.sop-card-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 12px 0; color: #6b7a78; font-size: 11px; }
+.sop-card-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.sop-card-meta i { color: #9aabac; font-size: 13px; }
+
+.sop-flow { display: grid; gap: 8px; flex: 1; padding: 12px; border: 1px solid #eef3f1; border-radius: 10px; background: #fbfdfc; }
+.sop-step { display: flex; gap: 10px; align-items: flex-start; }
+.sop-step-index { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #0eaa96; color: #ffffff; font-size: 10px; font-weight: 750; }
+.sop-step-body { min-width: 0; display: grid; gap: 2px; }
+.sop-step-body strong { color: #2b3945; font-size: 12px; font-weight: 650; }
+.sop-step-body small { color: #8a9a96; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sop-flow-empty { color: #a9bfbb; font-size: 12px; text-align: center; padding: 8px 0; }
+
+.sop-card-foot { display: flex; align-items: center; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+.sop-card-foot .button.sm { min-height: 28px; }
+.sop-card-foot .link-button { font-size: 12px; }
+
+.sop-empty { grid-column: 1 / -1; display: grid; place-items: center; justify-items: center; gap: 8px; padding: 50px 16px; border: 1px dashed #d7e4e0; border-radius: 12px; color: #8a9a96; text-align: center; }
+.sop-empty i { font-size: 40px; color: #c9ddd9; }
+.sop-empty strong { color: #4a5b62; font-size: 14px; }
+.sop-empty p { margin: 0 0 8px; max-width: 420px; font-size: 12px; line-height: 1.6; }
+
+/* 弹窗 */
+.sop-template-dialog { width: min(760px, calc(100vw - 24px)); }
+.sop-template-form-fields { max-height: min(80vh, 760px); overflow: auto; padding: 18px 20px; }
+.sop-template-basics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sop-template-basics .form-field:first-child { grid-column: 1 / -1; }
+.sop-template-nodes-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.sop-template-nodes-title strong { display: block; color: #172033; font-size: 14px; font-weight: 700; }
+.sop-template-nodes-title small { color: #8a9a96; font-size: 11px; }
+#sop-node-editor { display: grid; gap: 12px; }
+.sop-node-editor { border: 1px solid #e8efed; border-radius: 10px; background: #fbfdfc; padding: 12px 14px; }
+.sop-node-editor-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sop-node-editor-index { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 6px; background: #0eaa96; color: #ffffff; font-size: 11px; font-weight: 750; }
+.sop-node-editor-head strong { color: #172033; font-size: 13px; }
+.sop-node-editor-flow { color: #9aabac; font-size: 11px; margin-left: auto; }
+.sop-node-editor-head .icon-button { margin-left: 4px; }
+.sop-node-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.sop-node-field { display: grid; gap: 5px; }
+.sop-node-field > span { display: inline-flex; align-items: center; gap: 4px; color: #8a9a96; font-size: 11px; font-weight: 650; }
+.sop-node-field > span i { color: #0eaa96; font-size: 13px; }
+.sop-node-field .textarea { min-height: 64px; }
+
+@media (max-width: 1024px) {
+  .sop-grid { grid-template-columns: 1fr; }
+  .sop-stat-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .sop-view { padding: 20px 16px 34px; }
+  .sop-stat-strip { grid-template-columns: 1fr; }
+  .sop-node-editor-grid { grid-template-columns: 1fr; }
+  .sop-template-basics { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,90 @@
+/* ===== 字段配置面板样式 ===== */
+.field-config-card { padding: 0; overflow: hidden; }
+.field-config-header { padding: 16px 18px 12px; border-bottom: 1px solid #e8efed; }
+.field-config-header h2 { margin: 0 0 4px; font-size: 15px; color: #172033; }
+.field-config-header p { margin: 0; font-size: 11px; color: #8a9a96; }
+.field-config-table-wrap { overflow-x: auto; }
+.field-config-table { width: 100%; border-collapse: collapse; min-width: 720px; }
+.field-config-table th {
+  height: 38px;
+  padding: 0 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  color: #6c7a80;
+  background: #f8fafb;
+  border-bottom: 1px solid #e8efed;
+  white-space: nowrap;
+}
+.field-config-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f5f3;
+  vertical-align: middle;
+}
+.field-config-row:hover td { background: #f8fcfb; }
+.field-config-row:last-child td { border-bottom: 0; }
+
+.field-config-key code {
+  font-size: 10px;
+  color: #5a7a76;
+  background: #f0f8f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.field-config-label .field-config-input,
+.field-config-default .field-config-input {
+  height: 30px;
+  padding: 5px 8px;
+  font-size: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  color: #172033;
+}
+.field-config-label .field-config-input:hover,
+.field-config-default .field-config-input:hover {
+  border-color: #d0e6e1;
+  background: #fbfefd;
+}
+.field-config-label .field-config-input:focus,
+.field-config-default .field-config-input:focus {
+  border-color: #3caa98;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(60, 170, 152, 0.1);
+  outline: none;
+}
+
+.field-config-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.field-config-scope-badge.pool { color: #356fbe; background: #e2edff; }
+.field-config-scope-badge.task { color: #087f70; background: #e2f7f2; }
+.field-config-scope-badge.both { color: #9a6b17; background: #fff5d9; }
+
+.field-config-toggle { text-align: center; }
+.field-config-check {
+  width: 16px;
+  height: 16px;
+  accent-color: #0eaa96;
+  cursor: pointer;
+}
+
+.field-config-footer { padding: 10px 18px; border-top: 1px solid #e8efed; }
+.field-config-footer .helper { display: block; font-size: 10px; color: #9aabac; }
+
+@media (max-width: 720px) {
+  .field-config-header { padding: 12px 14px 10px; }
+  .field-config-table td { padding: 6px 8px; }
+  .field-config-key code { font-size: 9px; }
+  .field-config-label .field-config-input,
+  .field-config-default .field-config-input { font-size: 10px; padding: 4px 6px; height: 28px; }
+  .field-config-scope-badge { font-size: 9px; padding: 2px 6px; }
+  .field-config-footer { padding: 8px 14px; }
+}
