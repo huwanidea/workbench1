@@ -962,11 +962,6 @@ textarea:focus-visible {
 .daily-kanban .daily-block { grid-template-columns: 12px 16px minmax(0, 1fr); }
 .daily-kanban .daily-status-select { grid-column: 3; justify-self: start; }
 .daily-kanban .daily-block-actions { grid-column: 3; justify-content: flex-start; }
-.daily-kanban .today-task-row { grid-template-columns: 20px 14px minmax(0, 1fr) auto; gap: 4px; padding: 5px 6px 5px 0; min-height: 40px; }
-.daily-kanban .today-task-row .today-row-index { width: 20px; }
-.daily-kanban .today-task-row .today-task-copy strong { font-size: 11px; }
-.daily-kanban .today-task-row .daily-status-select { min-width: 46px; padding: 2px 6px; font-size: 8px; }
-.daily-kanban .today-task-blank-row { grid-template-columns: 20px 14px minmax(0, 1fr) 46px; min-height: 34px; }
 
 /* kanban column resize handle */
 .kanban-col-resize {
@@ -996,6 +991,63 @@ textarea:focus-visible {
   background: rgba(8, 127, 112, 0.45);
 }
 body.kanban-col-resizing { cursor: col-resize !important; user-select: none !important; }
+
+/* kanban blank quick-input row */
+.daily-kanban-blank {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px dashed #d8e4e2;
+  border-radius: 5px;
+  background: #ffffff;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.daily-kanban-blank:hover,
+.daily-kanban-blank:focus-within {
+  border-color: #9edfd3;
+  background: #f8fcfb;
+}
+.daily-kanban-quick-input {
+  min-width: 0;
+  flex: 1;
+  height: 26px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #172033;
+  font-size: 11px;
+}
+.daily-kanban-quick-input::placeholder { color: #b0c4c0; }
+.daily-kanban-quick-input:focus { background: #fff; box-shadow: inset 0 0 0 1px rgba(14, 170, 150, 0.28); }
+
+/* kanban blank quick-input rows — same look as the document list rows */
+.kanban-blank-group {
+  display: grid;
+  align-content: start;
+  overflow: hidden;
+  border: 1px solid #e8efed;
+  border-radius: 6px;
+  background: #ffffff;
+}
+.kanban-blank-group .today-task-blank-row {
+  min-height: 34px;
+  padding: 0 8px 0 0;
+  border-bottom: 1px solid #f0f5f3;
+}
+.kanban-blank-group .today-task-blank-row:last-child { border-bottom: 0; }
+.kanban-blank-group .today-quick-task-input { height: 33px; padding: 0 6px; font-size: 11px; }
+.kanban-blank-group .today-blank-status { padding-left: 0; }
+
+.daily-add-row {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.daily-add-row .input { min-width: 0; height: 34px; font-size: 11px; }
+.daily-add-row .button { min-height: 34px; padding: 6px 11px; font-size: 11px; }
 
 .daily-task-row {
   min-height: 47px;
@@ -3893,3 +3945,105 @@ html, body {
   border: 0 !important;
   box-shadow: none !important;
 }
+
+/* ===== v16: 统一所有板块任务块为「明日工作计划」卡片尺寸 ===== */
+
+/* 列表容器统一间距，让每个卡片块之间保持一致间距 */
+.today-task-list,
+.daily-kanban-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+/* 今日工作动态：主任务行 → 与明日计划完全一致的卡片块 */
+.today-task-row:not(.today-task-blank-row):not(.today-task-subtask-row) {
+  min-height: 48px;
+  grid-template-columns: 20px 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 6px 8px 6px 5px;
+  border: 1px solid #e2e9eb;
+  border-radius: 6px;
+  background: #fbfcfd;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.today-task-row:not(.today-task-blank-row):not(.today-task-subtask-row):hover {
+  border-color: #c9ddd9;
+  background: #fbfffe;
+}
+.today-task-row:not(.today-task-blank-row):not(.today-task-subtask-row).selected {
+  border-color: #b0e2d8;
+  background: #f0faf7;
+  box-shadow: inset 3px 0 0 #0eaa96;
+}
+.today-task-row:not(.today-task-blank-row):not(.today-task-subtask-row) .today-row-index {
+  border-right: 0;
+  color: #aab4bb;
+  font-size: 11px;
+  cursor: grab;
+}
+
+/* 子任务：缩进的小卡片，视觉上作为主任务的子项 */
+.today-task-subtask-row {
+  min-height: 34px;
+  margin-left: 22px;
+  padding: 4px 8px;
+  border: 1px solid #eef3f1;
+  border-radius: 5px;
+  background: #fbfdfc;
+}
+.today-task-subtask-row:hover {
+  border-color: #dcece8;
+  background: #f3faf7;
+}
+.today-task-subtask-row .today-row-index {
+  border-right: 0;
+}
+
+/* 昨日写下的今日计划 → 同样的卡片块尺寸 */
+.handoff-row {
+  min-height: 48px;
+  padding: 6px 8px 6px 5px;
+  gap: 8px;
+  border: 1px solid #e2e9eb;
+  border-radius: 6px;
+  background: #fbfcfd;
+  box-shadow: none;
+  transform: none;
+  margin-bottom: 0;
+}
+.handoff-row:hover {
+  border-color: #c9ddd9;
+  background: #fbfffe;
+  box-shadow: none;
+  transform: none;
+}
+.handoff-row strong {
+  margin-bottom: 1px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+/* 本周 / 本月计划 → 与明日计划同样的卡片尺寸（去掉紧凑高度） */
+.daily-block.compact {
+  min-height: 48px;
+  padding-right: 8px;
+}
+
+@media (max-width: 720px) {
+  .today-task-subtask-row { margin-left: 14px; }
+}
+
+/* ===== End v16 ===== */
+
+/* ===== v17: 收紧板块内任务块之间的间距 ===== */
+.today-task-list,
+.tomorrow-panel .today-task-list,
+.daily-kanban-list,
+.daily-kanban .daily-kanban-list,
+.daily-items,
+.handoff-list,
+.period-plan-list {
+  gap: 2px;
+}
+/* ===== End v17 ===== */

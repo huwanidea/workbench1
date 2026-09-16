@@ -3,11 +3,6 @@ export const NOTIFICATION_TYPES = {
   MENTION: 'mention',
   CHAT: 'chat',
   SYSTEM: 'system',
-  OVERDUE: 'overdue',
-  DEADLINE: 'deadline',
-  DAILY_REMINDER: 'daily-reminder',
-  REVIEWER: 'reviewer',
-  REWORK: 'rework',
 };
 
 export function createNotification(fromUser, toUserId, type, payload) {
@@ -91,12 +86,12 @@ export function renderNotificationPanel(state) {
     <div class="notification-panel-body">
       ${notifications.map((n) => {
         const time = new Date(n.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        const meta = notificationMeta(n);
+        const icon = n.type === 'mention' ? '<i class="ri-at-line"></i>' : n.type === 'chat' ? '<i class="ri-message-3-line"></i>' : '<i class="ri-information-line"></i>';
         return `<div class="notification-item ${n.read ? 'read' : 'unread'}" data-notification-id="${n.id}" data-action="click-notification" data-notification-type="${n.type}">
-          <div class="notification-icon">${meta.icon}</div>
+          <div class="notification-icon">${icon}</div>
           <div class="notification-content">
-            <div class="notification-title">${meta.title}</div>
-            <div class="notification-text">${meta.text}</div>
+            <div class="notification-title">${n.type === 'mention' ? `<strong>${esc(n.fromUserName)}</strong> 在任务中提到了你` : n.type === 'chat' ? `<strong>${esc(n.fromUserName)}</strong> 发来消息` : '系统通知'}</div>
+            <div class="notification-text">${esc(n.taskTitle || n.content || '')}</div>
             <div class="notification-time">${time}</div>
           </div>
           <button class="notification-delete" data-action="delete-notification" data-notification-id="${n.id}" aria-label="删除">×</button>
@@ -191,12 +186,12 @@ export function renderNotificationItems(state) {
   }
   return notifications.map((n) => {
     const time = new Date(n.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const meta = notificationMeta(n);
+    const icon = n.type === 'mention' ? '<i class="ri-at-line"></i>' : n.type === 'chat' ? '<i class="ri-message-3-line"></i>' : '<i class="ri-information-line"></i>';
     return `<div class="notification-item ${n.read ? 'read' : 'unread'}" data-notification-id="${n.id}" data-action="click-notification" data-notification-type="${n.type}">
-      <div class="notification-icon">${meta.icon}</div>
+      <div class="notification-icon">${icon}</div>
       <div class="notification-content">
-        <div class="notification-title">${meta.title}</div>
-        <div class="notification-text">${meta.text}</div>
+        <div class="notification-title">${n.type === 'mention' ? `<strong>${esc(n.fromUserName)}</strong> 在任务中提到了你` : n.type === 'chat' ? `<strong>${esc(n.fromUserName)}</strong> 发来消息` : '系统通知'}</div>
+        <div class="notification-text">${esc(n.taskTitle || n.content || '')}</div>
         <div class="notification-time">${time}</div>
       </div>
       <button class="notification-delete" data-action="delete-notification" data-notification-id="${n.id}" aria-label="删除">×</button>
@@ -243,28 +238,6 @@ export function renderMentionMenu(users, query) {
       </button>`).join('')}
     </div>
   </div>`;
-}
-
-function notificationMeta(n) {
-  const text = String(n?.title || n?.taskTitle || n?.content || '');
-  switch (n?.type) {
-    case 'mention':
-      return { icon: '<i class="ri-at-line"></i>', title: `<strong>${esc(n.fromUserName)}</strong> 在任务中提到了你`, text: esc(text) };
-    case 'chat':
-      return { icon: '<i class="ri-message-3-line"></i>', title: `<strong>${esc(n.fromUserName)}</strong> 发来消息`, text: esc(text) };
-    case 'overdue':
-      return { icon: '<i class="ri-time-line"></i>', title: '任务已超期', text: esc(text) };
-    case 'deadline':
-      return { icon: '<i class="ri-timer-flash-line"></i>', title: '截止日期临近', text: esc(text) };
-    case 'daily-reminder':
-      return { icon: '<i class="ri-edit-box-line"></i>', title: '今日工作记录提醒', text: esc(text) };
-    case 'reviewer':
-      return { icon: '<i class="ri-user-star-line"></i>', title: '你被指定为验收人', text: esc(text) };
-    case 'rework':
-      return { icon: '<i class="ri-arrow-go-back-line"></i>', title: '任务被退回修改', text: esc(text) };
-    default:
-      return { icon: '<i class="ri-information-line"></i>', title: '系统通知', text: esc(text) };
-  }
 }
 
 function esc(value) {

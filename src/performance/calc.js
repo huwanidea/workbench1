@@ -80,7 +80,6 @@ export const DEFAULT_STATE = {
   messages: [],
   documentTree: [],
   projects: [],
-  sopTemplates: [],
 };
 
 const numberOrNull = (value) => {
@@ -235,52 +234,6 @@ export function validateState(state) {
   return errors;
 }
 
-function normalizeSopTemplate(template) {
-  return {
-    id: template.id || crypto.randomUUID(),
-    name: template.name || '',
-    scene: template.scene || '',
-    defaultOwnerRole: template.defaultOwnerRole || '',
-    defaultReviewerRole: template.defaultReviewerRole || '',
-    standardDuration: template.standardDuration ?? '',
-    nodes: Array.isArray(template.nodes) ? template.nodes.map((node) => ({
-      id: node.id || crypto.randomUUID(),
-      input: node.input || '',
-      action: node.action || '',
-      output: node.output || '',
-      acceptance: node.acceptance || '',
-      next: node.next || '',
-      ...(Number.isFinite(Number(node.order)) ? { order: Number(node.order) } : {}),
-    })).filter((node) => node.id) : [],
-    createdAt: template.createdAt || new Date().toISOString(),
-    ...(Number.isFinite(Number(template.order)) ? { order: Number(template.order) } : {}),
-  };
-}
-
-function normalizeProjectTask(task) {
-  return {
-    id: task.id || crypto.randomUUID(),
-    title: task.title || '',
-    assignee: task.assignee || '',
-    reviewer: task.reviewer || '',
-    dueDate: dateToISO(task.dueDate),
-    status: ['todo', 'doing', 'done'].includes(task.status) ? task.status : 'todo',
-    priority: task.priority || '普通',
-    workItemId: task.workItemId || '',
-    performanceTaskId: task.performanceTaskId || '',
-    predecessors: Array.isArray(task.predecessors) ? task.predecessors.filter((id) => id) : [],
-    requirement: task.requirement || '',
-    acceptance: task.acceptance || '',
-    deliverables: Array.isArray(task.deliverables) ? task.deliverables.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done) })) : [],
-    comments: Array.isArray(task.comments) ? task.comments.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', author: item.author || '', createdAt: item.createdAt || '' })) : [],
-    blocked: Boolean(task.blocked),
-    blockedReason: task.blockedReason || '',
-    acceptanceStatus: task.acceptanceStatus || '',
-    subtasks: Array.isArray(task.subtasks) ? task.subtasks.map(normalizeProjectTask).filter((t) => t.id) : [],
-    ...(Number.isFinite(Number(task.order)) ? { order: Number(task.order) } : {}),
-  };
-}
-
 export function normalizeState(input) {
   const state = structuredClone(DEFAULT_STATE);
   if (!input || typeof input !== 'object') return state;
@@ -299,7 +252,7 @@ export function normalizeState(input) {
     id: task.id || crypto.randomUUID(), date: dateToISO(task.date), content: task.content || '', body: task.body || '', category: task.category || '其他', planType: task.planType || '单人工作', collaborator: task.collaborator || '', estimatedHours: task.estimatedHours ?? '', actualHours: task.actualHours ?? '', completionPct: task.completionPct ?? '', collaborationPct: task.collaborationPct ?? '', innovation: task.innovation ?? '', selfScore: task.selfScore ?? '', reviewerScore: task.reviewerScore ?? '', nextPlan: task.nextPlan || '', blocker: task.blocker || '', breakthrough: task.breakthrough || '', subtasks: Array.isArray(task.subtasks) ? task.subtasks.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done) })) : [], ...(Number.isFinite(Number(task.order)) ? { order: Number(task.order) } : {}), ...(Number.isFinite(Number(task.nextPlanOrder)) ? { nextPlanOrder: Number(task.nextPlanOrder) } : {}), ...(task.nextPlanDone ? { nextPlanDone: true } : {}), ...(task.sourceDailyItemId ? { sourceDailyItemId: task.sourceDailyItemId } : {}), ...(task.frozen ? { frozen: true } : {}), ...(task.nextPlanFrozen ? { nextPlanFrozen: true } : {}),
   })) : [];
   state.workItems = Array.isArray(input.workItems) ? input.workItems.map((item) => ({
-    id: item.id || crypto.randomUUID(), title: item.title || '', description: item.description || '', category: item.category || state.settings.taskCategories[0] || '其他', planType: item.planType || '单人工作', priority: item.priority || '普通', dueDate: dateToISO(item.dueDate), status: item.status || 'todo', reviewer: item.reviewer || '', acceptanceStatus: item.acceptanceStatus || '', performanceTaskId: item.performanceTaskId || '', createdAt: item.createdAt || new Date().toISOString(), completedAt: item.completedAt || '', owner: item.owner || '', ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}),
+    id: item.id || crypto.randomUUID(), title: item.title || '', description: item.description || '', category: item.category || state.settings.taskCategories[0] || '其他', planType: item.planType || '单人工作', priority: item.priority || '普通', dueDate: dateToISO(item.dueDate), status: item.status || 'todo', reviewer: item.reviewer || '', acceptanceStatus: item.acceptanceStatus || '', performanceTaskId: item.performanceTaskId || '', createdAt: item.createdAt || new Date().toISOString(), completedAt: item.completedAt || '', ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}),
   })) : [];
   state.dailyPlans = Object.fromEntries(Object.entries(input.dailyPlans || {}).map(([date, plan]) => [dateToISO(date), {
     today: Array.isArray(plan?.today) ? plan.today.map((item) => ({ id: item.id || crypto.randomUUID(), text: item.text || '', done: Boolean(item.done), ...(Number.isFinite(Number(item.order)) ? { order: Number(item.order) } : {}), ...(item.frozen ? { frozen: true } : {}), ...(item.linkRef ? { linkRef: item.linkRef } : {}) })) : [],
@@ -324,28 +277,14 @@ export function normalizeState(input) {
     name: project.name || '',
     description: project.description || '',
     category: project.category || '项目管理',
-    stage: String(project.stage || (project.status === 'doing' ? '开发执行' : project.status === 'done' ? '已交付' : '规划立项') || '规划立项'),
     priority: project.priority || '普通',
     status: project.status || 'todo',
-    riskOverride: project.riskOverride || '',
     owner: project.owner || '',
     startDate: dateToISO(project.startDate),
     dueDate: dateToISO(project.dueDate),
     taskIds: Array.isArray(project.taskIds) ? project.taskIds.filter((id) => id) : [],
-    milestones: Array.isArray(project.milestones) ? project.milestones.map((milestone) => ({
-      id: milestone.id || crypto.randomUUID(),
-      name: milestone.name || '',
-      description: milestone.description || '',
-      dueDate: dateToISO(milestone.dueDate),
-      status: ['todo', 'doing', 'done'].includes(milestone.status) ? milestone.status : 'todo',
-      owner: milestone.owner || '',
-      reviewer: milestone.reviewer || '',
-      ...(Number.isFinite(Number(milestone.order)) ? { order: Number(milestone.order) } : {}),
-      tasks: Array.isArray(milestone.tasks) ? milestone.tasks.map(normalizeProjectTask).filter((task) => task.id) : [],
-    })).filter((milestone) => milestone.id) : [],
     createdAt: project.createdAt || new Date().toISOString(),
     ...(Number.isFinite(Number(project.order)) ? { order: Number(project.order) } : {}),
   })).filter((project) => project.id) : [];
-  state.sopTemplates = Array.isArray(input.sopTemplates) ? input.sopTemplates.map(normalizeSopTemplate).filter((template) => template.id) : [];
   return state;
 }

@@ -1,5 +1,5 @@
 /* eslint-disable */
-import { DEFAULT_STATE, PLAN_TYPES, TASK_CATEGORIES, calculateDay, calculateMonth, calendarHours, dateToISO, monthKey, monthLabel, normalizeState, validateState } from './calc.js';
+import { DEFAULT_STATE, PLAN_TYPES, TASK_CATEGORIES, calculateDay, calculateMonth, dateToISO, monthKey, monthLabel, normalizeState, validateState } from './calc.js';
 import { getFieldConfigs, renderFieldConfigPanel } from './field-config.js';
 import {
   renderNotificationItems, renderChatUserList,
@@ -10,9 +10,9 @@ import {
   documentNodes, renderDocTree, createDocumentNode, createFolderNode,
   collectDescendantIds, TASKS_GROUP_ID,
 } from './documents.js';
-import { projectForId, createProjectNode, createMilestone, createProjectTask, renderProjects, findProjectTask, sopTemplateForId, createSopNode, collectProjectAcceptance } from './projects.js';
-import { renderProjectTaskDrawer } from './project-task-detail.js';
-import { renderSopTemplateLibrary, renderSopNodeEditor } from './sop-templates.js';
+import { documentTemplateFor, renderDocTemplateGallery } from './doc-templates.js';
+import { projectForId, createProjectNode, renderProjects } from './projects.js';
+import { AVATAR_LIBRARY, createEnglishSceneData, isEnglishScene, renderEnglishScene } from './english-scene.js';
 
 const LEGACY_STORAGE_KEY = 'performance-review-state-v1';
 const USER_DIRECTORY_KEY = 'performance-review-users-v1';
@@ -127,7 +127,7 @@ function saveAssessmentTemplateLibrary() {
 }
 const assessmentTemplate = (id) => ASSESSMENT_TEMPLATES.find((template) => template.id === id) || ASSESSMENT_TEMPLATES[0];
 const assessmentTemplateOptions = (selectedId) => ASSESSMENT_TEMPLATES.map((template) => `<option value="${template.id}" ${template.id === selectedId ? 'selected' : ''}>${esc(template.name)} · ${esc(template.role)}</option>`).join('');
-const USER_PREFERENCE_KEYS = ['performance-selected-daily-task', 'performance-daily-view-mode', 'performance-daily-layout-preset', 'performance-daily-task-file-open', 'performance-daily-row-heights', 'performance-daily-row-sizes', 'performance-daily-panel-layout', 'performance-tomorrow-panel-visible-v1', 'performance-demo-seeded-v2', 'performance-daily-workspace-mode'];
+const USER_PREFERENCE_KEYS = ['performance-selected-daily-task', 'performance-daily-view-mode', 'performance-daily-layout-preset', 'performance-daily-task-file-open', 'performance-daily-row-heights', 'performance-daily-row-sizes', 'performance-daily-panel-layout', 'performance-tomorrow-panel-visible-v1', 'performance-panel-order-swap-v1', 'performance-demo-seeded-v2', 'performance-daily-workspace-mode'];
 const makeUserRecord = (profile = {}) => ({
   id: crypto.randomUUID(),
   name: String(profile.name || '').trim() || '默认用户',
@@ -210,7 +210,7 @@ const DAILY_PANEL_KEYS = ['today', 'handoff', 'tomorrow', 'weekly', 'monthly'];
 const DAILY_GRID_UNITS = 1000;
 const DAILY_PANEL_HARD_MIN_PX = 240;
 const DAILY_PANEL_WRAP_PX = 230;
-const DAILY_PANEL_DEFAULTS = { today: { order: 0, span: 500, frozen: false }, handoff: { order: 1, span: 500, frozen: false }, tomorrow: { order: 2, span: 500, frozen: false }, weekly: { order: 3, span: 500, frozen: false }, monthly: { order: 4, span: 500, frozen: false } };
+const DAILY_PANEL_DEFAULTS = { today: { order: 0, span: 500, frozen: false }, tomorrow: { order: 1, span: 500, frozen: false }, handoff: { order: 2, span: 500, frozen: false }, weekly: { order: 3, span: 500, frozen: false }, monthly: { order: 4, span: 500, frozen: false } };
 const DAILY_LAYOUT_PRESETS = { split: { label: '上 2 下 3', rows: [2, 3] }, stacked: { label: '上 1 中 1 下 3', rows: [1, 1, 3] } };
 const DAILY_VISIBLE_PANEL_KEYS = ['today', 'handoff', 'tomorrow', 'weekly', 'monthly'];
 const activeDailyPanelKeys = () => (dailyWorkspaceMode === 'work' ? ['today'] : DAILY_VISIBLE_PANEL_KEYS);
@@ -243,6 +243,19 @@ function migrateTomorrowPanelVisibility() {
   }
 }
 migrateTomorrowPanelVisibility();
+function migratePanelOrderSwap() {
+  if (localStorage.getItem(userPreferenceKey('performance-panel-order-swap-v1')) !== '1') {
+    const handoffOrder = dailyPanelLayout.handoff?.order;
+    const tomorrowOrder = dailyPanelLayout.tomorrow?.order;
+    if (Number.isFinite(Number(handoffOrder)) && Number.isFinite(Number(tomorrowOrder))) {
+      dailyPanelLayout.handoff.order = tomorrowOrder;
+      dailyPanelLayout.tomorrow.order = handoffOrder;
+      localStorage.setItem(userPreferenceKey('performance-daily-panel-layout'), JSON.stringify(dailyPanelLayout));
+    }
+    localStorage.setItem(userPreferenceKey('performance-panel-order-swap-v1'), '1');
+  }
+}
+migratePanelOrderSwap();
 const saveDailyPanelLayout = () => localStorage.setItem(userPreferenceKey('performance-daily-panel-layout'), JSON.stringify(dailyPanelLayout));
 const saveDailyRowHeights = () => localStorage.setItem(userPreferenceKey('performance-daily-row-heights'), JSON.stringify(dailyRowHeights));
 const saveDailyLayoutRowSizes = () => localStorage.setItem(userPreferenceKey('performance-daily-row-sizes'), JSON.stringify(dailyLayoutRowSizes));
@@ -410,33 +423,6 @@ function toggleDailyPanelFreeze(action) {
   toast(dailyPanelLayout[key].frozen ? '板块已冻结，仅保留勾选操作' : '板块已解冻');
 }
 let sidebarCollapsed = localStorage.getItem('performance-sidebar-collapsed') === '1';
-// ===== 侧边栏导航按钮拖动排序 =====
-const NAV_ORDER_KEY = 'performance-nav-order';
-let draggedNavItem = null;
-function navTabsFromDom() {
-  return Array.from(document.querySelectorAll('.nav-list .nav-item[data-tab]')).map((button) => button.dataset.tab);
-}
-function loadNavOrder() {
-  const stored = parseStoredJson(NAV_ORDER_KEY, null);
-  const current = navTabsFromDom();
-  if (Array.isArray(stored) && stored.length) {
-    const valid = stored.filter((tab) => current.includes(tab));
-    const missing = current.filter((tab) => !valid.includes(tab));
-    return [...valid, ...missing];
-  }
-  return current;
-}
-function applyNavOrder() {
-  const list = document.querySelector('.nav-list');
-  if (!list) return;
-  const order = loadNavOrder();
-  const byTab = {};
-  list.querySelectorAll('.nav-item[data-tab]').forEach((button) => { byTab[button.dataset.tab] = button; });
-  order.forEach((tab) => { const button = byTab[tab]; if (button) list.appendChild(button); });
-}
-function saveNavOrder() {
-  localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(navTabsFromDom()));
-}
 const expandedTaskIds = new Set();
 const expandedPoolIds = new Set();
 let chatTab = 'messages';
@@ -445,26 +431,11 @@ let promptResolve = null;
 let confirmResolve = null;
 let selectedPlanDate = dateToISO(new Date());
 let docSelection = { kind: 'doc', id: '' };
+let docTemplateCategory = 'all';
+let sceneAvatarPickerCharId = null;
 const docExpanded = new Set([TASKS_GROUP_ID]);
 let selectedProjectId = '';
-let projectCenterFilter = 'all';
-let projectViewMode = localStorage.getItem('performance-projects-view-mode') === 'board' ? 'board' : 'list';
-let projectSearch = '';
-let selectedProjectTaskId = '';
-let activeProjectTab = '概览';
-let projectTaskStatusFilter = '';
-let projectTaskView = 'tree';
-const collapsedMilestones = new Set();
-const collapsedTasks = new Set();
-let sopViewOpen = false;
-let editingSopTemplateId = null;
-let editingSopNodes = [];
 let editingProjectId = null;
-let editingMilestoneProjectId = '';
-let editingMilestoneId = null;
-let editingProjectTaskProjectId = '';
-let editingProjectTaskMilestoneId = '';
-let editingProjectTaskId = null;
 let syncPoolSelected = new Set(['today']);
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
@@ -533,6 +504,7 @@ function loadActiveUserWorkspace(userId) {
   dailyLayoutRowSizes = parseStoredJson(userPreferenceKey('performance-daily-row-sizes'), {});
   dailyPanelLayout = loadDailyPanelLayout();
   migrateTomorrowPanelVisibility();
+  migratePanelOrderSwap();
   normalizeDailyRowSpans();
   selectedDate = '';
   selectedDailyDate = dateToISO(new Date());
@@ -666,6 +638,11 @@ function updateChatNavBadge() {
 }
 
 function render() {
+  const scrollEl = document.scrollingElement || document.documentElement;
+  const prevScrollTop = scrollEl.scrollTop;
+  const prevScrollLeft = scrollEl.scrollLeft;
+  const docEditorBody = document.querySelector('.doc-editor-body');
+  const prevDocScrollTop = docEditorBody ? docEditorBody.scrollTop : 0;
   renderUserSwitcher();
   updateChatNavBadge();
   const modeSwitch = document.getElementById('topbar-mode-switch');
@@ -702,13 +679,7 @@ function render() {
   $('#view-params .page-head')?.insertAdjacentHTML('afterend', renderTemplateLibrary());
   $('#view-settings').innerHTML = renderSystemSettings();
   $('#view-documents').innerHTML = renderDocuments();
-  $('#view-projects').innerHTML = sopViewOpen
-    ? renderSopTemplateLibrary(state, { currentUser: activeUser()?.name })
-    : renderProjects(state, { selectedId: selectedProjectId, filter: projectCenterFilter, viewMode: projectViewMode, search: projectSearch, currentUser: activeUser()?.name, collapsedMilestones, collapsedTasks, selectedProjectTaskId, activeProjectTab, taskStatusFilter: projectTaskStatusFilter, taskView: projectTaskView });
-  if (selectedProjectId && selectedProjectTaskId) {
-    const project = projectForId(state, selectedProjectId);
-    if (project) $('#view-projects').insertAdjacentHTML('beforeend', renderProjectTaskDrawer(state, project, selectedProjectTaskId, activeUser()?.name));
-  }
+  $('#view-projects').innerHTML = renderProjects(state, { selectedId: selectedProjectId });
   $('#view-chat').innerHTML = renderChatView();
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.tab === activeTab));
   document.querySelectorAll('.view').forEach((view) => view.classList.toggle('active', view.id === `view-${activeTab}`));
@@ -726,6 +697,10 @@ function render() {
   if (todayTypeOption) todayTypeOption.textContent = '今日工作动态';
   if (databaseViewSource && summaryCreateType) { summaryCreateType.value = databaseViewSource; summaryCreateType.disabled = true; }
   if (databaseViewSource && summarySourceFilter) summarySourceFilter.disabled = true;
+  const nextDocEditorBody = document.querySelector('.doc-editor-body');
+  if (nextDocEditorBody) nextDocEditorBody.scrollTop = prevDocScrollTop;
+  scrollEl.scrollTop = prevScrollTop;
+  scrollEl.scrollLeft = prevScrollLeft;
 }
 
 function syncDailyPanelLockState() {
@@ -883,212 +858,6 @@ function seedDemoData() {
   localStorage.setItem(demoKey, '1');
 }
 
-function seedSopDemoTemplates() {
-  const key = userPreferenceKey('performance-sop-seeded-v1');
-  if (localStorage.getItem(key) === '1') return;
-  if (!Array.isArray(state.sopTemplates)) state.sopTemplates = [];
-  const samples = [
-    {
-      id: 'demo-sop-version-release',
-      name: '版本发布标准流程',
-      scene: '软件版本迭代与发布',
-      defaultOwnerRole: '研发负责人',
-      defaultReviewerRole: '质量负责人',
-      standardDuration: '7',
-      order: 10,
-      nodes: [
-        { id: 'demo-sop-ver-n1', input: '产品需求文档 + 迭代范围', action: '需求评审与拆分', output: '评审结论与任务拆分表', acceptance: '需求范围明确、无遗漏', next: '编码开发', order: 10 },
-        { id: 'demo-sop-ver-n2', input: '任务拆分表', action: '编码与单元测试', output: '可运行代码', acceptance: '单元测试通过率 100%', next: '集成测试', order: 20 },
-        { id: 'demo-sop-ver-n3', input: '可运行代码', action: '集成测试与回归', output: '测试报告', acceptance: '核心用例全通过', next: '发布上线', order: 30 },
-        { id: 'demo-sop-ver-n4', input: '测试报告', action: '发布上线与监控', output: '线上发布记录', acceptance: '线上无重大故障', next: '复盘', order: 40 },
-      ],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'demo-sop-content-launch',
-      name: '内容营销上线流程',
-      scene: '新媒体内容策划与发布',
-      defaultOwnerRole: '内容运营',
-      defaultReviewerRole: '运营负责人',
-      standardDuration: '5',
-      order: 20,
-      nodes: [
-        { id: 'demo-sop-content-n1', input: '选题池与热点', action: '选题策划', output: '选题单', acceptance: '选题贴合品牌调性', next: '内容创作', order: 10 },
-        { id: 'demo-sop-content-n2', input: '选题单', action: '内容创作与排版', output: '成稿', acceptance: '图文质量达标', next: '审核发布', order: 20 },
-        { id: 'demo-sop-content-n3', input: '成稿', action: '审核与发布', output: '发布记录', acceptance: '无敏感内容、按时发布', next: '数据复盘', order: 30 },
-      ],
-      createdAt: new Date().toISOString(),
-    },
-  ];
-  for (const sample of samples) if (!state.sopTemplates.some((template) => template.id === sample.id)) state.sopTemplates.push(sample);
-  save();
-  localStorage.setItem(key, '1');
-}
-
-function seedDemoProjects() {
-  const key = userPreferenceKey('performance-demo-projects-v1');
-  if (localStorage.getItem(key) === '1') return;
-  if (!Array.isArray(state.projects)) state.projects = [];
-  const today = dateToISO(new Date());
-  const d = (n) => shiftDate(today, n);
-  const samples = [
-    {
-      id: 'demo-project-app-v3',
-      name: '移动端 App 3.0 版本发布',
-      description: '围绕体验重构与性能优化发布 3.0 大版本，覆盖需求、设计、开发、测试与灰度发布全流程。',
-      category: '需求开发',
-      stage: '开发执行',
-      priority: '高',
-      status: 'doing',
-      riskOverride: '',
-      owner: '张伟',
-      startDate: d(-10),
-      dueDate: d(20),
-      taskIds: [],
-      order: 10,
-      milestones: [
-        {
-          id: 'demo-appv3-m1', name: '需求与设计', description: '完成需求评审、交互与视觉设计定稿，作为开发输入。', dueDate: d(-5), status: 'done', owner: '张伟', reviewer: '李娜', order: 10,
-          tasks: [
-            { id: 'demo-appv3-m1-t1', title: '产品需求评审', assignee: '张伟', reviewer: '李娜', dueDate: d(-9), status: 'done', priority: '高', workItemId: '', performanceTaskId: '', predecessors: [], requirement: '整理 3.0 需求池，组织跨职能评审并锁定范围。', acceptance: '需求范围与优先级评审通过，输出结论文档。', deliverables: [{ id: 'demo-appv3-m1-t1-d1', text: '需求评审结论文档', done: true }], comments: [{ id: 'demo-appv3-m1-t1-c1', text: '已完成评审，范围与优先级已锁定。', author: '张伟', createdAt: d(-9) }], blocked: false, blockedReason: '', acceptanceStatus: 'accepted', subtasks: [], order: 10 },
-            { id: 'demo-appv3-m1-t2', title: '交互设计定稿', assignee: '李娜', reviewer: '张伟', dueDate: d(-7), status: 'done', priority: '高', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m1-t1'], requirement: '输出核心流程的交互原型并组织走查。', acceptance: '关键路径交互走查通过。', deliverables: [{ id: 'demo-appv3-m1-t2-d1', text: '交互原型稿', done: true }], comments: [], blocked: false, blockedReason: '', acceptanceStatus: 'accepted', subtasks: [], order: 20 },
-            { id: 'demo-appv3-m1-t3', title: '视觉设计稿输出', assignee: '王强', reviewer: '李娜', dueDate: d(-5), status: 'done', priority: '普通', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m1-t2'], requirement: '基于交互稿输出高保真视觉稿与标注。', acceptance: '视觉稿通过评审并交付标注。', deliverables: [{ id: 'demo-appv3-m1-t3-d1', text: '高保真视觉稿', done: true }], comments: [], blocked: false, blockedReason: '', acceptanceStatus: 'accepted', subtasks: [], order: 30 },
-          ],
-        },
-        {
-          id: 'demo-appv3-m2', name: '开发实现', description: '核心功能开发、接口联调与性能优化。', dueDate: d(10), status: 'doing', owner: '王强', reviewer: '张伟', order: 20,
-          tasks: [
-            {
-              id: 'demo-appv3-m2-t1', title: '核心功能开发', assignee: '王强', reviewer: '张伟', dueDate: d(8), status: 'doing', priority: '高', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m1-t3'], requirement: '按视觉稿实现首页、消息与个人中心三大模块。', acceptance: '三大模块功能可用且通过代码评审。', deliverables: [], comments: [{ id: 'demo-appv3-m2-t1-c1', text: '首页重构已完成，消息模块进行中。', author: '王强', createdAt: d(-2) }], blocked: false, blockedReason: '', acceptanceStatus: '', order: 10,
-              subtasks: [
-                { id: 'demo-appv3-m2-t1-s1', title: '首页信息流重构', assignee: '王强', reviewer: '张伟', dueDate: d(2), status: 'done', priority: '高', predecessors: [], deliverables: [], comments: [], blocked: false, subtasks: [], order: 10 },
-                { id: 'demo-appv3-m2-t1-s2', title: '消息模块重构', assignee: '王强', reviewer: '张伟', dueDate: d(6), status: 'doing', priority: '高', predecessors: [], deliverables: [], comments: [], blocked: false, subtasks: [], order: 20 },
-                { id: 'demo-appv3-m2-t1-s3', title: '个人中心改版', assignee: '王强', reviewer: '张伟', dueDate: d(8), status: 'todo', priority: '普通', predecessors: [], deliverables: [], comments: [], blocked: false, subtasks: [], order: 30 },
-              ],
-            },
-            { id: 'demo-appv3-m2-t2', title: '接口联调', assignee: '赵敏', reviewer: '张伟', dueDate: d(3), status: 'doing', priority: '高', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m2-t1'], requirement: '与后端完成 3.0 新接口联调。', acceptance: '新接口全量联调通过。', deliverables: [], comments: [], blocked: true, blockedReason: '等待后端网关升级，预计后天恢复。', acceptanceStatus: '', subtasks: [], order: 20 },
-            { id: 'demo-appv3-m2-t3', title: '性能优化', assignee: '王强', reviewer: '张伟', dueDate: d(10), status: 'todo', priority: '普通', workItemId: '', performanceTaskId: '', predecessors: [], requirement: '针对启动耗时与首屏渲染做专项优化。', acceptance: '启动耗时降低 30% 以上。', deliverables: [], comments: [], blocked: false, blockedReason: '', acceptanceStatus: '', subtasks: [], order: 30 },
-          ],
-        },
-        {
-          id: 'demo-appv3-m3', name: '测试与发布', description: '全量回归、灰度发布与线上监控。', dueDate: d(20), status: 'todo', owner: '赵敏', reviewer: '李娜', order: 30,
-          tasks: [
-            { id: 'demo-appv3-m3-t1', title: '全量回归测试', assignee: '赵敏', reviewer: '李娜', dueDate: d(16), status: 'todo', priority: '高', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m2-t2'], requirement: '覆盖全部核心用例执行回归。', acceptance: '核心用例全通过，无 P0/P1 缺陷。', deliverables: [], comments: [], blocked: false, blockedReason: '', acceptanceStatus: '', subtasks: [], order: 10 },
-            { id: 'demo-appv3-m3-t2', title: '灰度发布与监控', assignee: '张伟', reviewer: '李娜', dueDate: d(20), status: 'todo', priority: '高', workItemId: '', performanceTaskId: '', predecessors: ['demo-appv3-m3-t1'], requirement: '按 5% 分批灰度并监控崩溃率。', acceptance: '灰度期间无重大故障，正式全量。', deliverables: [], comments: [], blocked: false, blockedReason: '', acceptanceStatus: '', subtasks: [], order: 20 },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'demo-project-website',
-      name: '企业官网改版',
-      description: '重构企业官网的视觉风格与内容结构，提升品牌形象与线索转化。',
-      category: '产品设计',
-      stage: '视觉设计',
-      priority: '普通',
-      status: 'doing',
-      riskOverride: '',
-      owner: '李娜',
-      startDate: d(-6),
-      dueDate: d(14),
-      taskIds: [],
-      order: 20,
-      milestones: [
-        {
-          id: 'demo-web-m1', name: '内容规划', description: '梳理站点结构与文案。', dueDate: d(-3), status: 'done', owner: '李娜', reviewer: '张伟', order: 10,
-          tasks: [
-            { id: 'demo-web-m1-t1', title: '站点信息架构梳理', assignee: '李娜', reviewer: '张伟', dueDate: d(-5), status: 'done', priority: '普通', predecessors: [], deliverables: [{ id: 'demo-web-m1-t1-d1', text: '站点结构图', done: true }], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 10 },
-            { id: 'demo-web-m1-t2', title: '核心页面文案撰写', assignee: '赵敏', reviewer: '李娜', dueDate: d(-3), status: 'done', priority: '普通', predecessors: ['demo-web-m1-t1'], deliverables: [{ id: 'demo-web-m1-t2-d1', text: '文案初稿', done: true }], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 20 },
-          ],
-        },
-        {
-          id: 'demo-web-m2', name: '视觉设计', description: '输出官网视觉稿。', dueDate: d(4), status: 'doing', owner: '李娜', reviewer: '张伟', order: 20,
-          tasks: [
-            { id: 'demo-web-m2-t1', title: '首页视觉稿设计', assignee: '王强', reviewer: '李娜', dueDate: d(4), status: 'doing', priority: '高', predecessors: ['demo-web-m1-t2'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 10 },
-            { id: 'demo-web-m2-t2', title: '内页视觉稿设计', assignee: '王强', reviewer: '李娜', dueDate: d(8), status: 'todo', priority: '普通', predecessors: ['demo-web-m2-t1'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 20 },
-          ],
-        },
-        {
-          id: 'demo-web-m3', name: '开发上线', description: '页面开发与部署。', dueDate: d(14), status: 'todo', owner: '张伟', reviewer: '李娜', order: 30,
-          tasks: [
-            { id: 'demo-web-m3-t1', title: '前端页面开发', assignee: '张伟', reviewer: '李娜', dueDate: d(12), status: 'todo', priority: '高', predecessors: ['demo-web-m2-t2'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 10 },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'demo-project-data',
-      name: '数据中台搭建',
-      description: '统一数据接入与指标口径，支撑业务分析报表自动化。',
-      category: '项目管理',
-      stage: '规划立项',
-      priority: '普通',
-      status: 'todo',
-      riskOverride: '低',
-      owner: '王强',
-      startDate: d(1),
-      dueDate: d(35),
-      taskIds: [],
-      order: 30,
-      milestones: [
-        {
-          id: 'demo-data-m1', name: '需求调研', description: '盘点数据源与指标口径。', dueDate: d(10), status: 'todo', owner: '王强', reviewer: '张伟', order: 10,
-          tasks: [
-            { id: 'demo-data-m1-t1', title: '数据源盘点', assignee: '王强', reviewer: '张伟', dueDate: d(5), status: 'todo', priority: '高', predecessors: [], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 10 },
-            { id: 'demo-data-m1-t2', title: '指标口径对齐', assignee: '赵敏', reviewer: '王强', dueDate: d(10), status: 'todo', priority: '普通', predecessors: ['demo-data-m1-t1'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 20 },
-          ],
-        },
-        {
-          id: 'demo-data-m2', name: '平台搭建', description: '接入与建模。', dueDate: d(28), status: 'todo', owner: '张伟', reviewer: '王强', order: 20,
-          tasks: [
-            { id: 'demo-data-m2-t1', title: '数据接入管道搭建', assignee: '张伟', reviewer: '王强', dueDate: d(22), status: 'todo', priority: '高', predecessors: ['demo-data-m1-t2'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 10 },
-            { id: 'demo-data-m2-t2', title: '指标模型构建', assignee: '张伟', reviewer: '王强', dueDate: d(28), status: 'todo', priority: '普通', predecessors: ['demo-data-m2-t1'], deliverables: [], comments: [], blocked: false, acceptanceStatus: '', subtasks: [], order: 20 },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'demo-project-event',
-      name: '年度客户答谢活动',
-      description: '策划并落地年度客户答谢活动，强化客户关系与品牌口碑。',
-      category: '会议沟通',
-      stage: '已交付',
-      priority: '普通',
-      status: 'done',
-      riskOverride: '',
-      owner: '赵敏',
-      startDate: d(-30),
-      dueDate: d(-2),
-      taskIds: [],
-      order: 40,
-      milestones: [
-        {
-          id: 'demo-event-m1', name: '方案策划', description: '确定活动主题与方案。', dueDate: d(-20), status: 'done', owner: '赵敏', reviewer: '李娜', order: 10,
-          tasks: [
-            { id: 'demo-event-m1-t1', title: '活动方案策划', assignee: '赵敏', reviewer: '李娜', dueDate: d(-24), status: 'done', priority: '高', predecessors: [], deliverables: [{ id: 'demo-event-m1-t1-d1', text: '活动策划方案', done: true }], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 10 },
-          ],
-        },
-        {
-          id: 'demo-event-m2', name: '执行落地', description: '场地、物料与现场执行。', dueDate: d(-4), status: 'done', owner: '赵敏', reviewer: '李娜', order: 20,
-          tasks: [
-            { id: 'demo-event-m2-t1', title: '场地与物料准备', assignee: '赵敏', reviewer: '李娜', dueDate: d(-8), status: 'done', priority: '高', predecessors: ['demo-event-m1-t1'], deliverables: [{ id: 'demo-event-m2-t1-d1', text: '物料清单', done: true }], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 10 },
-            { id: 'demo-event-m2-t2', title: '现场执行与统筹', assignee: '赵敏', reviewer: '李娜', dueDate: d(-4), status: 'done', priority: '高', predecessors: ['demo-event-m2-t1'], deliverables: [], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 20 },
-          ],
-        },
-        {
-          id: 'demo-event-m3', name: '复盘总结', description: '活动效果复盘。', dueDate: d(-2), status: 'done', owner: '赵敏', reviewer: '李娜', order: 30,
-          tasks: [
-            { id: 'demo-event-m3-t1', title: '活动效果复盘报告', assignee: '赵敏', reviewer: '李娜', dueDate: d(-2), status: 'done', priority: '普通', predecessors: ['demo-event-m2-t2'], deliverables: [{ id: 'demo-event-m3-t1-d1', text: '复盘报告', done: true }], comments: [], blocked: false, acceptanceStatus: 'accepted', subtasks: [], order: 10 },
-          ],
-        },
-      ],
-    },
-  ];
-  for (const sample of samples) if (!state.projects.some((project) => project.id === sample.id)) state.projects.push(sample);
-  save();
-  localStorage.setItem(key, '1');
-}
-
 function sortWorkBlocks(entries) {
   return entries.map((entry, index) => ({ ...entry, fallbackOrder: index * 10 })).sort((a, b) => {
     const aOrder = a.item[a.orderKey || 'order'];
@@ -1176,10 +945,19 @@ function copySortableBlock(sourceGroup, sourceKey, targetGroup) {
   const targetEntries = sortableBlockEntries(targetGroup);
   const nextOrder = targetEntries.reduce((max, entry) => Math.max(max, Number(entry.item[entry.orderKey || 'order']) || 0), 0) + 10;
   if (targetEntries.some((entry) => entry.item.linkRef && entry.item.linkRef.kind === ref.kind && entry.item.linkRef.id === ref.id)) return toast('目标板块已关联此任务'), false;
-  if (scope === 'daily' && second === 'today' && ref.kind === 'task') {
-    const task = taskForId(ref.id);
-    if (task && task.date === first) return toast('该任务已在今日工作动态中'), false;
+  if (scope === 'daily' && second === 'today') {
+    if (ref.kind === 'task') {
+      const existingTask = taskForId(ref.id);
+      if (existingTask && existingTask.date === first) return toast('该任务已在今日工作动态中'), false;
+    }
+    if (state.tasks.some((task) => task.date === first && task.sourceLinkRef && task.sourceLinkRef.kind === ref.kind && task.sourceLinkRef.id === ref.id)) return toast('该事项已在今日工作动态中'), false;
+    const task = makeTaskRecord(text, first, { order: nextOrder, sourceLinkRef: ref });
+    state.tasks.push(task);
+    selectedDailyTaskId = task.id;
+    localStorage.setItem(userPreferenceKey('performance-selected-daily-task'), selectedDailyTaskId);
+    save(); render(); toast('已加入今日工作动态'); return true;
   }
+  if (targetEntries.some((entry) => entry.item.linkRef && entry.item.linkRef.kind === ref.kind && entry.item.linkRef.id === ref.id)) return toast('目标板块已关联此任务'), false;
   const link = { id: crypto.randomUUID(), linkRef: ref, text: '', done: false, order: nextOrder };
   if (scope === 'daily') dailyPlanFor(first)[second].push(link);
   else if (scope === 'plan') planFor(first, second).items.push(link);
@@ -1207,8 +985,6 @@ function setBlockProgressFromDrop(group, blockKey, status) {
 
 migrateDailyPlansToTasks();
 seedDemoData();
-seedSopDemoTemplates();
-seedDemoProjects();
 
 // ===== Novel 风格 Notion 式块编辑器 =====
 const NOVEL_BLOCK_ITEMS = [
@@ -1604,7 +1380,7 @@ function renderDailyWorkspace() {
   }
 
   const renderDailyTaskDocument = (task) => {
-    if (!task) return '<div class="today-task-document-empty"><strong>选择一个任务文件</strong><p>从左侧任务列表打开今天的工作记录。</p></div>';
+    if (!task) return '<div class="today-task-document-empty"><span class="task-file-icon">□</span><strong>选择一个任务文件</strong><p>从左侧任务列表打开今天的工作记录。</p></div>';
     const calculated = calculateDay(task.date, [task], state).tasks[0];
     const progressStatus = Number(task.completionPct) >= 100 ? 'done' : Number(task.completionPct) > 0 ? 'doing' : 'todo';
     const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
@@ -1612,60 +1388,33 @@ function renderDailyWorkspace() {
     return `<article class="today-task-document"><div class="today-doc-header"><div class="today-doc-breadcrumb"><span>今日工作动态</span><span>/</span><span>${esc(task.date)}</span><span>/</span><span>${esc(task.content || '未命名任务')}.md</span></div><span class="daily-info-status ${calculated.validationErrors.length ? 'incomplete' : 'complete'}">${calculated.validationErrors.length ? '信息待完善' : '信息完整'}</span></div>${renderTaskPropertiesPanel(task)}<div class="today-doc-editor">${renderNovelEditor(task, 'task')}</div><div class="today-doc-footer"><span class="today-doc-footer-meta">${esc(task.date || '未设置')}.md · ${wordCount} 字</span></div></article>`;
   };
   const entryStatus = (entry) => entry.kind === 'task' ? (Number(entry.item.completionPct) >= 100 ? 'done' : Number(entry.item.completionPct) > 0 ? 'doing' : 'todo') : (entry.item.done ? 'done' : 'todo');
-  const kanbanEntryRow = (entry, index) => {
-    const group = `daily|${date}|today`;
-    if (entry.kind === 'task') {
-      const task = entry.item;
-      const progressStatus = Number(task.completionPct) >= 100 ? 'done' : Number(task.completionPct) > 0 ? 'doing' : 'todo';
-      return `<div class="today-task-row" ${blockAttrs(group, `task:${task.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input class="daily-task-check" type="checkbox" data-action="toggle-daily-task" data-id="${task.id}" ${progressStatus === 'done' ? 'checked' : ''}><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><strong>${esc(task.content || '未命名任务')}</strong><small><span class="task-row-tag">${esc(task.category || '其他')}</span></small></span></span><div class="today-task-actions"><select class="daily-status-select ${progressStatus === 'done' ? 'tone-green' : progressStatus === 'doing' ? 'tone-gold' : ''}" data-daily-task-status data-id="${task.id}"><option value="todo" ${progressStatus === 'todo' ? 'selected' : ''}>待办</option><option value="doing" ${progressStatus === 'doing' ? 'selected' : ''}>进行中</option><option value="done" ${progressStatus === 'done' ? 'selected' : ''}>已完成</option></select></div></div>`;
-    }
-    const item = entry.item;
-    const done = linkDoneState(item);
-    const text = linkText(item);
-    return `<div class="today-task-row ${done ? 'done' : ''}" ${blockAttrs(group, `daily:${item.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input type="checkbox" class="daily-task-check" data-action="toggle-daily-item" data-daily-date="${date}" data-daily-bucket="today" data-item-id="${item.id}" ${done ? 'checked' : ''}><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><strong>${esc(text)}</strong><small>${item.linkRef ? '关联计划' : '计划块'}</small></span></span><div class="today-task-actions"><select class="daily-status-select ${done ? 'tone-green' : 'tone-gold'}" data-daily-plan-status data-date="${date}" data-bucket="today" data-item-id="${item.id}"><option value="pending" ${!done ? 'selected' : ''}>待推进</option><option value="done" ${done ? 'selected' : ''}>已完成</option></select></div></div>`;
-  };
-  const kanbanStatusLabel = { todo: '待办', doing: '进行中', done: '已完成' };
-  const kanbanBlankRows = (entries, statusKey) => Array.from({ length: 2 }, (_, slot) => `<div class="today-task-row today-task-blank-row"><span class="today-row-index" aria-hidden="true">${entries.length + slot + 1}</span><span class="today-blank-check" aria-hidden="true"></span><input class="today-quick-task-input" data-kanban-quick data-kanban-status="${statusKey}" data-date="${date}" data-quick-slot="${slot}" placeholder="${slot === 0 ? '输入任务，按 Enter 到下一行' : ''}"><span class="today-blank-status">${kanbanStatusLabel[statusKey]}</span></div>`).join('');
   const kanbanWidths = getKanbanWidths();
-  const todayBoard = `<div class="daily-kanban" style="--kanban-w0:${kanbanWidths[0]}%;--kanban-w1:${kanbanWidths[1]}%;--kanban-w2:${kanbanWidths[2]}%">${[['todo', '待办'], ['doing', '进行中'], ['done', '已完成']].map(([statusKey, label], colIdx) => { const entries = todayEntries.filter((entry) => entryStatus(entry) === statusKey); const resizeHandle = colIdx < 2 ? `<span class="kanban-col-resize" data-kanban-resize="${colIdx}" title="拖动调整列宽" aria-hidden="true"></span>` : ''; return `<section class="daily-kanban-column" data-kanban-col="${colIdx}"><div class="daily-kanban-head"><strong>${label}</strong><span>${entries.length}</span></div><div class="daily-kanban-list" data-sort-container data-sort-group="daily|${date}|today" data-daily-status="${statusKey}">${entries.map((entry, index) => kanbanEntryRow(entry, index)).join('')}${kanbanBlankRows(entries, statusKey)}</div></section>${resizeHandle}`; }).join('')}</div>`;
+  const todayBoard = `<div class="daily-kanban" style="--kanban-w0:${kanbanWidths[0]}%;--kanban-w1:${kanbanWidths[1]}%;--kanban-w2:${kanbanWidths[2]}%">${[['todo', '待办'], ['doing', '进行中'], ['done', '已完成']].map(([statusKey, label], colIdx) => { const entries = todayEntries.filter((entry) => entryStatus(entry) === statusKey); const resizeHandle = colIdx < 2 ? `<span class="kanban-col-resize" data-kanban-resize="${colIdx}" title="拖动调整列宽" aria-hidden="true"></span>` : ''; const kanbanBlankRows = `<div class="kanban-blank-group">${Array.from({ length: 2 }, (_, slot) => `<div class="today-task-row today-task-blank-row kanban-blank-row"><span class="today-row-index" aria-hidden="true">${entries.length + slot + 1}</span><span class="today-blank-check" aria-hidden="true"></span><input class="today-quick-task-input" data-daily-quick-kanban data-date="${date}" data-kanban-status="${statusKey}" data-quick-slot="${slot}" aria-label="第 ${entries.length + slot + 1} 行新任务" placeholder="${slot === 0 ? '输入任务，按 Enter 到下一行' : ''}"><span class="today-blank-status">待开始</span></div>`).join('')}</div>`; return `<section class="daily-kanban-column" data-kanban-col="${colIdx}"><div class="daily-kanban-head"><strong>${label}</strong><span>${entries.length}</span></div><div class="daily-kanban-list" data-sort-container data-sort-group="daily|${date}|today" data-daily-status="${statusKey}">${entries.map((entry, idx) => entry.kind === 'task' ? dailyTaskListRow(entry.item, idx) : dailyItem(entry.item, 'today')).join('')}${kanbanBlankRows}</div></section>${resizeHandle}`; }).join('')}</div>`;
   const handoffGroup = `handoff|${date}`;
   const handoffEntries = sortableBlockEntries(handoffGroup);
-  const inheritedRows = handoffEntries.map((entry, index) => { const item = entry.item; const text = entry.kind === 'handoff-task' ? (item.nextPlan || '') : linkText(item); const sourceLabel = entry.kind === 'handoff-task' ? '昨日任务' : (item.linkRef ? '关联计划' : '昨日计划'); return `<div class="today-task-row" ${blockAttrs(handoffGroup, `${entry.kind}:${item.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><span class="today-blank-check" aria-hidden="true"></span><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><strong>${esc(text)}</strong><small>${sourceLabel}</small></span></span><div class="today-task-actions"><span class="today-blank-status">${sourceLabel}</span></div></div>`; }).join('');
+  const inheritedRows = handoffEntries.map((entry) => { const item = entry.item; const text = entry.kind === 'handoff-task' ? (item.nextPlan || '') : linkText(item); const sourceLabel = entry.kind === 'handoff-task' ? '昨日任务' : (item.linkRef ? '关联计划' : '昨日计划'); return `<div class="handoff-row" ${blockAttrs(handoffGroup, `${entry.kind}:${item.id}`)}><span class="daily-block-handle" draggable="true" title="拖拽排序" aria-hidden="true">⋮⋮</span><div><strong>${esc(text)}</strong><p>${sourceLabel}</p></div></div>`; }).join('');
   const tomorrowTaskBlock = (task) => {
     const group = `daily|${date}|tomorrow`;
     const frozen = false;
     return `<div class="daily-block ${task.nextPlanDone ? 'done' : ''} ${frozen ? 'frozen' : ''}" ${blockAttrs(group, `task-next:${task.id}`)}><span class="daily-block-handle ${frozen ? 'disabled' : ''}" draggable="${!frozen}" title="${frozen ? '已冻结' : '拖拽排序'}" aria-hidden="true">⋮⋮</span><input type="checkbox" data-action="toggle-daily-task-next" data-id="${task.id}" ${task.nextPlanDone ? 'checked' : ''}><div class="daily-block-main"><input class="daily-block-title" data-daily-task-field="nextPlan" data-id="${task.id}" value="${inputValue(task.nextPlan)}" ${frozen ? 'readonly' : ''}><small>来自任务 · ${esc(task.content || '未命名任务')}</small></div><select class="daily-status-select ${task.nextPlanDone ? 'tone-green' : 'tone-gold'}" data-daily-task-next-status data-id="${task.id}" ${frozen ? 'disabled' : ''}><option value="pending" ${!task.nextPlanDone ? 'selected' : ''}>待推进</option><option value="done" ${task.nextPlanDone ? 'selected' : ''}>已完成</option></select><div class="daily-block-actions"><button class="link-button" data-action="toggle-block-freeze">${frozen ? '解冻' : '冻结'}</button><button class="link-button" data-action="edit-task" data-id="${task.id}" ${frozen ? 'disabled' : ''}>编辑</button></div></div>`;
   };
   const tomorrowEntries = sortWorkBlocks([...(plan.tomorrow || []).map((item) => ({ kind: 'daily', item })), ...todayTasks.filter((task) => task.nextPlan?.trim()).map((item) => ({ kind: 'task-next', item, orderKey: 'nextPlanOrder' }))]);
-  const tomorrowBlocks = tomorrowEntries.map((entry, index) => {
-    const item = entry.item;
-    const group = `daily|${date}|tomorrow`;
-    if (entry.kind === 'task-next') {
-      const task = item;
-      const done = task.nextPlanDone;
-      return `<div class="today-task-row ${done ? 'done' : ''}" ${blockAttrs(group, `task-next:${task.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input type="checkbox" class="daily-task-check" data-action="toggle-daily-task-next" data-id="${task.id}" ${done ? 'checked' : ''}><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><input class="daily-block-title" data-daily-task-field="nextPlan" data-id="${task.id}" value="${inputValue(task.nextPlan)}" placeholder="填写明日计划"><small>来自任务 · ${esc(task.content || '未命名任务')}</small></span></span><div class="today-task-actions"><select class="daily-status-select ${done ? 'tone-green' : 'tone-gold'}" data-daily-task-next-status data-id="${task.id}"><option value="pending" ${!done ? 'selected' : ''}>待推进</option><option value="done" ${done ? 'selected' : ''}>已完成</option></select></div></div>`;
-    } else {
-      const done = linkDoneState(item);
-      const text = linkText(item);
-      return `<div class="today-task-row ${done ? 'done' : ''}" ${blockAttrs(group, `daily:${item.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input type="checkbox" class="daily-task-check" data-action="toggle-daily-item" data-daily-date="${date}" data-daily-bucket="tomorrow" data-item-id="${item.id}" ${done ? 'checked' : ''}><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><input class="daily-block-title" data-daily-item-field="text" data-daily-date="${date}" data-daily-bucket="tomorrow" data-item-id="${item.id}" value="${inputValue(text)}" placeholder="填写计划内容"><small>明日计划 · ${item.linkRef ? '关联计划' : '计划块'}</small></span></span><div class="today-task-actions"><select class="daily-status-select ${done ? 'tone-green' : 'tone-gold'}" data-daily-plan-status data-date="${date}" data-bucket="tomorrow" data-item-id="${item.id}"><option value="pending" ${!done ? 'selected' : ''}>待推进</option><option value="done" ${done ? 'selected' : ''}>已完成</option></select><button class="today-task-add-subtask" data-action="delete-daily-item" data-daily-date="${date}" data-daily-bucket="tomorrow" data-item-id="${item.id}" aria-label="删除计划">×</button></div></div>`;
-    }
-  }).join('');
+  const tomorrowBlocks = tomorrowEntries.map((entry) => entry.kind === 'task-next' ? tomorrowTaskBlock(entry.item) : dailyItem(entry.item, 'tomorrow')).join('');
   const blankTomorrowRowCount = 2;
-  const blankTomorrowRows = Array.from({ length: blankTomorrowRowCount }, (_, slot) => `<div class="today-task-row today-task-blank-row"><span class="today-row-index" aria-hidden="true">${tomorrowEntries.length + slot + 1}</span><span class="today-blank-check" aria-hidden="true"></span><input class="today-quick-task-input" data-daily-quick-tomorrow data-date="${date}" data-quick-slot="${slot}" aria-label="第 ${tomorrowEntries.length + slot + 1} 行新计划" placeholder="${slot === 0 ? '添加明天要推进的工作，按 Enter 继续' : ''}"><span class="today-blank-status">待推进</span></div>`).join('');
+  const blankTomorrowRows = Array.from({ length: blankTomorrowRowCount }, (_, slot) => `<div class="daily-block daily-block-blank"><span class="daily-block-handle disabled" aria-hidden="true" style="opacity:0.25">⋮⋮</span><span aria-hidden="true"></span><input class="blank-input" data-daily-quick-tomorrow data-date="${date}" data-quick-slot="${slot}" placeholder="${slot === 0 ? '添加明天要推进的工作，按 Enter 继续' : ''}"><span class="blank-status">待推进</span><span aria-hidden="true"></span></div>`).join('');
   const planPreview = (kind, key, sourcePlan) => {
     const items = sourcePlan.items || [];
     const group = `plan|${kind}|${key}`;
-    const rows = sortWorkBlocks(items.map((item) => ({ kind, item }))).map(({ item }, index) => {
+    const blocks = sortWorkBlocks(items.map((item) => ({ kind, item }))).map(({ item }) => {
       const frozen = false;
       const done = linkDoneState(item);
       const text = linkText(item);
       const taskLink = isTaskLink(item);
       const sourceTag = taskLink ? '关联任务' : (item.linkRef ? '关联计划' : (kind === 'weekly' ? '周计划' : '月计划'));
-      return `<div class="today-task-row ${done ? 'done' : ''}" ${blockAttrs(group, `${kind}:${item.id}`)}><span class="daily-block-handle today-row-index" draggable="true" aria-label="拖动第 ${index + 1} 行">${index + 1}</span><input type="checkbox" class="daily-task-check" data-action="toggle-plan-item" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" ${done ? 'checked' : ''}><span class="today-task-select" style="cursor:default;"><span class="today-task-copy"><input class="daily-block-title" data-plan-item-field="text" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" value="${inputValue(text)}" placeholder="填写计划内容"><small>${sourceTag}</small></span></span><div class="today-task-actions"><select class="daily-status-select ${done ? 'tone-green' : 'tone-gold'}" data-plan-block-status data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}"><option value="pending" ${!done ? 'selected' : ''}>待推进</option><option value="done" ${done ? 'selected' : ''}>已完成</option></select><button class="today-task-add-subtask" data-action="delete-plan-item" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" aria-label="删除计划">×</button></div></div>`;
+      const editBtn = taskLink ? `<button class="link-button" data-action="edit-task" data-id="${esc(resolveLinkTarget(item.linkRef)?.id || '')}">打开文件</button>` : `<button class="link-button" data-action="focus-block-edit" ${frozen ? 'disabled' : ''}>编辑</button>`;
+      return `<div class="daily-block compact ${done ? 'done' : ''} ${frozen ? 'frozen' : ''}" ${blockAttrs(group, `${kind}:${item.id}`)}><span class="daily-block-handle ${frozen ? 'disabled' : ''}" draggable="${!frozen}" title="${frozen ? '已冻结' : '拖拽排序'}" aria-hidden="true">⋮⋮</span><input type="checkbox" data-action="toggle-plan-item" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" ${done ? 'checked' : ''}><div class="daily-block-main"><input class="daily-block-title" data-plan-item-field="text" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" value="${inputValue(text)}" ${frozen ? 'readonly' : ''}><small>${sourceTag}</small></div><select class="daily-status-select ${done ? 'tone-green' : 'tone-gold'}" data-plan-block-status data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" ${frozen ? 'disabled' : ''}><option value="pending" ${!done ? 'selected' : ''}>待推进</option><option value="done" ${done ? 'selected' : ''}>已完成</option></select><div class="daily-block-actions"><button class="link-button" data-action="toggle-block-freeze">${frozen ? '解冻' : '冻结'}</button>${editBtn}<button class="daily-delete" data-action="delete-plan-item" data-plan-kind="${kind}" data-plan-key="${key}" data-item-id="${item.id}" aria-label="删除计划" ${frozen ? 'disabled' : ''}>×</button></div></div>`;
     }).join('');
-    const blankCount = 2;
-    const blankRows = Array.from({ length: blankCount }, (_, slot) => `<div class="today-task-row today-task-blank-row"><span class="today-row-index" aria-hidden="true">${items.length + slot + 1}</span><span class="today-blank-check" aria-hidden="true"></span><input class="today-quick-task-input" data-plan-quick data-plan-kind="${kind}" data-plan-key="${key}" data-quick-slot="${slot}" aria-label="第 ${items.length + slot + 1} 行新计划" placeholder="${slot === 0 ? '输入计划，按 Enter 到下一行' : ''}"><span class="today-blank-status">待推进</span></div>`).join('');
-    return `<div class="today-task-list" data-sort-container data-sort-group="${group}">${rows || ''}${blankRows}</div>`;
+    return `<div class="period-plan-list" data-sort-container data-sort-group="${group}">${blocks || '<div class="daily-empty">还没有计划事项</div>'}</div>`;
   };
 
   const panelFreezeBtn = (key) => {
@@ -1673,11 +1422,11 @@ function renderDailyWorkspace() {
     return `<button type="button" class="daily-panel-freeze" data-action="toggle-daily-panel-freeze" title="${frozen ? '解冻模块' : '冻结模块'}"><i class="ri-${frozen ? 'lock-fill' : 'lock-unlock-line'}"></i></button>`;
   };
   const panelContent = {
-    today: `${dailyTodayViewMode === 'board' ? `${todayBoard}` : `<div class="today-task-file-layout ${dailyTaskFileOpen ? '' : 'file-collapsed'}" data-task-split data-sort-container data-sort-group="daily|${date}|today" style="--task-split:${dailyTaskSplitRatio}"><aside class="today-task-list-pane"><div class="today-task-list-head"><span>今日任务</span><div class="daily-view-switch"><button class="${dailyTodayViewMode === 'list' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="list">文档</button><button class="${dailyTodayViewMode === 'board' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="board">看板</button></div><span class="today-task-count">${todayTaskEntries.length}</span></div><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|today">${todayTaskEntries.map((entry, index) => dailyTaskListRow(entry.item, index)).join('')}${blankTaskRows}</div></aside>${dailyTaskFileOpen ? '<span class="today-task-divider" data-task-divider title="拖动调整左右宽度" aria-hidden="true"></span>' : ''}<div class="today-task-document-pane">${renderDailyTaskDocument(selectedTask)}</div></div>`}`,
-    handoff: `<div class="today-task-list-head" style="background:#fafcfb;border-bottom:1px solid #e8efed"><span>昨日带入</span><span class="today-task-count">${handoffEntries.length}</span></div><div class="today-task-list" data-sort-container data-sort-group="${handoffGroup}">${inheritedRows || '<div class="daily-empty">昨日没有写下今天的计划。</div>'}</div>`,
-    tomorrow: `<div class="today-task-list-head" style="background:#fafcfb;border-bottom:1px solid #e8efed"><span>明日计划</span><span class="today-task-count">${tomorrowEntries.length}</span><button class="today-task-add-btn" data-action="add-daily-item" data-daily-date="${date}" data-daily-bucket="tomorrow" style="pointer-events:auto" type="button"><i class="ri-add-line"></i></button></div><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|tomorrow">${tomorrowBlocks}${blankTomorrowRows}</div>`,
-    weekly: `<div class="today-task-list-head" style="background:#fafcfb;border-bottom:1px solid #e8efed"><span>本周计划</span><span class="today-task-count">${weeklyPlan.items?.length || 0}</span></div>${planPreview('weekly', weeklyKey, weeklyPlan)}`,
-    monthly: `<div class="today-task-list-head" style="background:#fafcfb;border-bottom:1px solid #e8efed"><span>本月计划</span><span class="today-task-count">${monthlyPlan.items?.length || 0}</span></div>${planPreview('monthly', monthlyKey, monthlyPlan)}`,
+    today: `<div class="daily-panel-head"><div><h2>今日工作动态</h2><p>任务文件 · 点击左侧任务查看右侧文档</p></div><div class="daily-panel-tools"><div class="daily-view-switch"><button class="${dailyTodayViewMode === 'list' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="list">文档</button><button class="${dailyTodayViewMode === 'board' ? 'active' : ''}" data-action="daily-view-mode" data-view-mode="board">看板</button></div><button class="link-button" data-action="toggle-daily-task-file">${dailyTaskFileOpen ? '收起文件' : '展开文件'}</button>${panelFreezeBtn('today')}<span class="tag green">${todayTotal} 项</span></div></div>${dailyTodayViewMode === 'board' ? todayBoard : `<div class="today-task-file-layout ${dailyTaskFileOpen ? '' : 'file-collapsed'}" data-task-split data-sort-container data-sort-group="daily|${date}|today" style="--task-split:${dailyTaskSplitRatio}"><aside class="today-task-list-pane"><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|today">${todayTaskEntries.map((entry, index) => dailyTaskListRow(entry.item, index)).join('')}${blankTaskRows}</div></aside>${dailyTaskFileOpen ? '<span class="today-task-divider" data-task-divider title="拖动调整左右宽度" aria-hidden="true"></span>' : ''}<div class="today-task-document-pane">${renderDailyTaskDocument(selectedTask)}</div></div>`}`,
+    handoff: `<div class="daily-panel-head"><div><span class="daily-kicker muted-kicker">FROM YESTERDAY</span><h2>昨日写下的今日计划</h2></div><div class="daily-panel-tools">${panelFreezeBtn('handoff')}<span class="tag">${handoffEntries.length} 项</span></div></div><div class="handoff-list" data-sort-container data-sort-group="${handoffGroup}">${inheritedRows || '<div class="daily-empty">昨日没有写下今天的计划。</div>'}</div>`,
+    tomorrow: `<div class="daily-panel-head"><div><span class="daily-kicker tomorrow-kicker">NEXT</span><h2>明日工作计划</h2></div><div class="daily-panel-tools">${panelFreezeBtn('tomorrow')}<span class="tag gold">${tomorrow.slice(5)}</span></div></div><div class="today-task-list" data-sort-container data-sort-group="daily|${date}|tomorrow">${tomorrowBlocks}${blankTomorrowRows}</div>`,
+    weekly: `<div class="daily-panel-head"><div><span class="daily-kicker week-kicker">WEEK</span><h2>本周计划</h2><p>${weeklyPlan.title || `${weeklyKey} 起`}</p></div><div class="daily-panel-tools">${panelFreezeBtn('weekly')}<button class="link-button" data-action="open-plan" data-plan-kind="weekly">管理</button></div></div>${planPreview('weekly', weeklyKey, weeklyPlan)}`,
+    monthly: `<div class="daily-panel-head"><div><span class="daily-kicker month-kicker">MONTH</span><h2>本月计划</h2><p>${monthlyPlan.title || monthlyKey}</p></div><div class="daily-panel-tools">${panelFreezeBtn('monthly')}<button class="link-button" data-action="open-plan" data-plan-kind="monthly">管理</button></div></div>${planPreview('monthly', monthlyKey, monthlyPlan)}`,
   };
   const panelClasses = { today: 'daily-today-panel', handoff: 'handoff-panel', tomorrow: 'tomorrow-panel', weekly: 'period-panel', monthly: 'period-panel' };
   const panelSortGroups = { today: `daily|${date}|today`, handoff: handoffGroup, tomorrow: `daily|${date}|tomorrow`, weekly: `plan|weekly|${weeklyKey}`, monthly: `plan|monthly|${monthlyKey}` };
@@ -1795,36 +1544,19 @@ function renderPlanView(kind) {
 }
 
 function renderAcceptance() {
-  const waitingPool = state.workItems.filter((item) => item.reviewer && item.status === 'done' && item.acceptanceStatus !== 'accepted');
-  const projectGroups = (state.projects || []).map((project) => ({ project, items: collectProjectAcceptance(project) })).filter((g) => g.items.length);
-  const projectTotal = projectGroups.reduce((sum, g) => sum + g.items.length, 0);
-  const total = waitingPool.length + projectTotal;
-
-  const poolSection = `<div class="acceptance-group">
-    <div class="acceptance-group-head"><span class="acceptance-group-icon pool"><i class="ri-inbox-line"></i></span><div><strong>任务池</strong><small>独立事项的验收</small></div><span class="acceptance-group-count">${waitingPool.length}</span></div>
-    ${waitingPool.length ? waitingPool.map((item) => `<div class="acceptance-item"><div><strong>${esc(item.title)}</strong><div class="task-sub">${esc(item.category)} · 截止 ${item.dueDate || '未设置'} · ${poolTag(item)}</div></div><div class="acceptance-actions"><button class="button primary" data-action="accept-pool" data-id="${item.id}">通过验收</button><button class="button ghost" data-action="rework-pool" data-id="${item.id}">退回修改</button></div></div>`).join('') : '<div class="acceptance-empty">暂无待验收事项</div>'}
-  </div>`;
-
-  const projectSections = projectGroups.map(({ project, items }) => `<div class="acceptance-group">
-    <div class="acceptance-group-head"><span class="acceptance-group-icon project"><i class="ri-folder-line"></i></span><div><strong>${esc(project.name)}</strong><small>项目任务验收</small></div><span class="acceptance-group-count">${items.length}</span></div>
-    ${items.map(({ task, milestone }) => `<div class="acceptance-item"><div><strong>${esc(task.title || '未命名任务')}</strong><div class="task-sub">${esc(milestone?.name || '')} · 验收人 ${esc(task.reviewer || '未指定')} · 截止 ${task.dueDate || '未设置'}</div></div><div class="acceptance-actions"><button class="link-button" data-action="open-project-task-acceptance" data-project-id="${esc(project.id)}" data-task-id="${esc(task.id)}">查看任务</button><button class="button primary" data-action="accept-project-task" data-project-id="${esc(project.id)}" data-task-id="${esc(task.id)}">通过验收</button><button class="button ghost" data-action="rework-project-task" data-project-id="${esc(project.id)}" data-task-id="${esc(task.id)}">退回修改</button></div></div>`).join('')}
-  </div>`).join('');
-
-  return `<div class="page-head"><div><span class="eyebrow">Acceptance Queue</span><h1>验收工作</h1><p>指定你为验收人的任务完成后，会自动按来源聚合到这里。</p></div><div class="head-controls"><span class="tag gold">${total} 项待处理</span></div></div>${total ? `<div class="acceptance-groups">${projectSections}${poolSection}</div>` : '<div class="card section-card acceptance-list"><div class="empty">暂时没有待验收任务</div></div>'}`;
+  const waiting = state.workItems.filter((item) => item.reviewer && item.status === 'done' && item.acceptanceStatus !== 'accepted');
+  return `<div class="page-head"><div><span class="eyebrow">Acceptance Queue</span><h1>验收工作</h1><p>指定你为验收人的任务完成后，会自动出现在这里。</p></div><div class="head-controls"><span class="tag gold">${waiting.length} 项待处理</span></div></div><div class="card section-card acceptance-list">${waiting.length ? waiting.map((item) => `<div class="acceptance-item"><div><strong>${esc(item.title)}</strong><div class="task-sub">${esc(item.category)} · 截止 ${item.dueDate || '未设置'} · ${poolTag(item)}</div></div><div class="acceptance-actions"><button class="button primary" data-action="accept-pool" data-id="${item.id}">通过验收</button><button class="button ghost" data-action="rework-pool" data-id="${item.id}">退回修改</button></div></div>`).join('') : '<div class="empty">暂时没有待验收任务</div>'}</div>`;
 }
 
 function addQuickPoolItem() {
   const title = document.querySelector('#quick-title')?.value.trim();
   if (!title) return toast('先写下要做的事情');
-  state.workItems.unshift({ id: crypto.randomUUID(), title, description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: document.querySelector('#quick-priority')?.value || '普通', dueDate: document.querySelector('#quick-due')?.value || '', status: 'todo', reviewer: document.querySelector('#quick-reviewer')?.value.trim() || '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '', owner: activeUser()?.name || '' });
+  state.workItems.unshift({ id: crypto.randomUUID(), title, description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: document.querySelector('#quick-priority')?.value || '普通', dueDate: document.querySelector('#quick-due')?.value || '', status: 'todo', reviewer: document.querySelector('#quick-reviewer')?.value.trim() || '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '' });
   save(); render(); toast('已加入任务池');
 }
 function updatePoolField(target) {
   const item = state.workItems.find((entry) => entry.id === target.dataset.poolId); if (!item) return;
-  const key = target.dataset.poolField;
-  const previousReviewer = item.reviewer;
-  item[key] = target.value;
-  if (key === 'reviewer') notifyReviewerAssignment(item, previousReviewer);
+  const key = target.dataset.poolField; item[key] = target.value;
   if (key === 'status' && target.value === 'done' && !item.completedAt) item.completedAt = new Date().toISOString();
   if (key === 'status' && target.value !== 'done') { item.completedAt = ''; item.acceptanceStatus = ''; }
   save(); render();
@@ -1874,16 +1606,10 @@ function commitQuickDailyTask(input, focusNext = false) {
 function commitQuickKanbanTask(input, focusNext = false) {
   if (!input || input.dataset.committing === '1') return false;
   const text = input.value.trim();
-  const status = input.dataset.kanbanStatus || 'todo';
-  if (!text) {
-    if (focusNext) {
-      const nextSlot = Number(input.dataset.quickSlot) + 1;
-      document.querySelector(`[data-kanban-quick][data-kanban-status="${status}"][data-quick-slot="${nextSlot}"]`)?.focus();
-    }
-    return false;
-  }
+  if (!text) return false;
   input.dataset.committing = '1';
   const date = input.dataset.date || selectedDailyDate;
+  const status = input.dataset.kanbanStatus || 'todo';
   const completionPct = { todo: 0, doing: 50, done: 100 }[status] ?? 0;
   const maxOrder = state.tasks.filter((task) => task.date === date).reduce((highest, task) => Math.max(highest, Number(task.order) || 0), 0);
   const task = makeTaskRecord(text, date, { order: maxOrder + 10, completionPct });
@@ -1892,7 +1618,7 @@ function commitQuickKanbanTask(input, focusNext = false) {
   localStorage.setItem(userPreferenceKey('performance-selected-daily-task'), selectedDailyTaskId);
   save();
   render();
-  if (focusNext) setTimeout(() => document.querySelector(`[data-kanban-quick][data-kanban-status="${status}"][data-quick-slot="0"]`)?.focus(), 0);
+  if (focusNext) setTimeout(() => document.querySelector(`[data-daily-quick-kanban][data-date="${date}"][data-kanban-status="${status}"]`)?.focus(), 0);
   return true;
 }
 
@@ -1917,27 +1643,28 @@ function commitQuickTomorrowItem(input, focusNext = false) {
   return true;
 }
 
-function commitQuickPlanItem(input, focusNext = false) {
+function commitSceneBlankDialogue(input, focusNext = false) {
   if (!input || input.dataset.committing === '1') return false;
+  const slot = input.dataset.slot;
   const text = input.value.trim();
   if (!text) {
     if (focusNext) {
-      const nextSlot = Number(input.dataset.quickSlot) + 1;
-      const kind = input.dataset.planKind;
-      const key = input.dataset.planKey;
-      document.querySelector(`[data-plan-quick][data-plan-kind="${kind}"][data-plan-key="${key}"][data-quick-slot="${nextSlot}"]`)?.focus();
+      const nextSlot = Number(slot) + 1;
+      document.querySelector(`[data-scene-blank-text][data-slot="${nextSlot}"]`)?.focus();
     }
     return false;
   }
+  const node = activeSceneNode();
+  if (!node) return false;
   input.dataset.committing = '1';
-  const kind = input.dataset.planKind;
-  const key = input.dataset.planKey;
-  const plan = planFor(kind, key);
-  const maxOrder = (plan.items || []).reduce((highest, item) => Math.max(highest, Number(item.order) || 0), 0);
-  plan.items.push({ id: crypto.randomUUID(), text, done: false, order: maxOrder + 10 });
+  const charId = document.querySelector(`[data-scene-blank-char="${slot}"]`)?.value || node.sceneData.characters[0]?.id || '';
+  const time = document.querySelector(`[data-scene-blank-time="${slot}"]`)?.value.trim() || '';
+  const dialogue = { id: crypto.randomUUID(), characterId: charId, time, text, notes: { vocab: [], phrases: [], usage: [], grammar: [], alternatives: [] } };
+  node.sceneData.dialogue.push(dialogue);
+  node.sceneData.activeDialogueId = dialogue.id;
   save();
   render();
-  if (focusNext) setTimeout(() => document.querySelector(`[data-plan-quick][data-plan-kind="${kind}"][data-plan-key="${key}"][data-quick-slot="0"]`)?.focus(), 0);
+  if (focusNext) setTimeout(() => document.querySelector('[data-scene-blank-text][data-slot="0"]')?.focus(), 0);
   return true;
 }
 
@@ -1946,7 +1673,7 @@ function createQuickSummaryItem(type, text) {
   if (type === 'task' || type === 'daily-today') {
     state.tasks.unshift(makeTaskRecord(text, today));
   } else if (type === 'pool') {
-    state.workItems.unshift({ id: crypto.randomUUID(), title: text, description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: '普通', dueDate: today, status: 'todo', reviewer: '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '', owner: activeUser()?.name || '' });
+    state.workItems.unshift({ id: crypto.randomUUID(), title: text, description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: '普通', dueDate: today, status: 'todo', reviewer: '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '' });
   } else if (type === 'daily-tomorrow') {
     dailyPlanFor(today).tomorrow.unshift({ id: crypto.randomUUID(), text, done: false });
   } else if (type === 'weekly') {
@@ -2378,7 +2105,6 @@ function performSyncToPool() {
         performanceTaskId: entry.kind === 'task' ? entry.task.id : '',
         createdAt: new Date().toISOString(),
         completedAt: entry.done ? new Date().toISOString() : '',
-        owner: activeUser()?.name || '',
       };
       state.workItems.unshift(item);
       added += 1;
@@ -2395,7 +2121,7 @@ function openProjectDialog(projectId = '') {
   const project = projectId ? projectForId(state, projectId) : null;
   $('#project-dialog-title').textContent = project ? '编辑项目' : '新建项目';
   const value = (key, fallback = '') => project?.[key] ?? fallback;
-  $('#project-form-fields').innerHTML = `<label class="form-field full"><span class="label">项目名称 *</span><input class="input" name="name" required maxlength="60" value="${inputValue(value('name'))}" placeholder="例如：季度销售系统重构"></label><label class="form-field"><span class="label">项目分类</span><select class="select" name="category">${(state.settings.taskCategories || TASK_CATEGORIES).map((category) => `<option ${value('category', '项目管理') === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label><label class="form-field"><span class="label">优先级</span><select class="select" name="priority">${['高', '普通', '低'].map((priority) => `<option ${value('priority', '普通') === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label><label class="form-field"><span class="label">状态</span><select class="select" name="status">${[['todo', '待启动'], ['doing', '进行中'], ['done', '已完成']].map(([key, label]) => `<option value="${key}" ${value('status', 'todo') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="form-field"><span class="label">风险等级</span><select class="select" name="riskOverride">${[['', '自动判断'], ['低', '低'], ['中', '中'], ['高', '高']].map(([key, label]) => `<option value="${key}" ${value('riskOverride', '') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="form-field"><span class="label">负责人</span><input class="input" name="owner" maxlength="30" value="${inputValue(value('owner'))}" placeholder="负责人姓名"></label><label class="form-field"><span class="label">开始日期</span><input class="input" name="startDate" type="date" value="${inputValue(value('startDate'))}"></label><label class="form-field"><span class="label">截止日期</span><input class="input" name="dueDate" type="date" value="${inputValue(value('dueDate'))}"></label><label class="form-field full"><span class="label">项目说明</span><textarea class="textarea" name="description" rows="3" placeholder="描述项目目标、范围和交付物">${inputValue(value('description'))}</textarea></label>`;
+  $('#project-form-fields').innerHTML = `<label class="form-field full"><span class="label">项目名称 *</span><input class="input" name="name" required maxlength="60" value="${inputValue(value('name'))}" placeholder="例如：季度销售系统重构"></label><label class="form-field"><span class="label">项目分类</span><select class="select" name="category">${(state.settings.taskCategories || TASK_CATEGORIES).map((category) => `<option ${value('category', '项目管理') === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label><label class="form-field"><span class="label">优先级</span><select class="select" name="priority">${['高', '普通', '低'].map((priority) => `<option ${value('priority', '普通') === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label><label class="form-field"><span class="label">状态</span><select class="select" name="status">${[['todo', '待启动'], ['doing', '进行中'], ['done', '已完成']].map(([key, label]) => `<option value="${key}" ${value('status', 'todo') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="form-field"><span class="label">负责人</span><input class="input" name="owner" maxlength="30" value="${inputValue(value('owner'))}" placeholder="负责人姓名"></label><label class="form-field"><span class="label">开始日期</span><input class="input" name="startDate" type="date" value="${inputValue(value('startDate'))}"></label><label class="form-field"><span class="label">截止日期</span><input class="input" name="dueDate" type="date" value="${inputValue(value('dueDate'))}"></label><label class="form-field full"><span class="label">项目说明</span><textarea class="textarea" name="description" rows="3" placeholder="描述项目目标、范围和交付物">${inputValue(value('description'))}</textarea></label>`;
   $('#project-dialog').showModal();
   $('#project-form [name="name"]')?.focus();
 }
@@ -2414,7 +2140,6 @@ function saveProjectFromDialog() {
     category: data.category,
     priority: data.priority,
     status: data.status,
-    riskOverride: data.riskOverride || '',
     owner: String(data.owner || '').trim(),
     startDate: data.startDate,
     dueDate: data.dueDate,
@@ -2477,391 +2202,50 @@ function toggleProjectTaskLink(projectId, taskId, checked) {
   if (row) row.classList.toggle('linked', checked);
 }
 
-function projectUserOptions() {
-  return users.map((user) => `<option value="${esc(user.name)}"></option>`).join('');
+function openDocTemplateDialog() {
+  docTemplateCategory = 'all';
+  const body = $('#doc-template-body');
+  if (body) body.innerHTML = renderDocTemplateGallery(docTemplateCategory);
+  $('#doc-template-dialog')?.showModal();
 }
 
-function openMilestoneDialog(projectId, milestoneId = '') {
-  editingMilestoneProjectId = projectId;
-  editingMilestoneId = milestoneId || null;
-  const project = projectForId(state, projectId);
-  const milestone = milestoneId ? project?.milestones?.find((entry) => entry.id === milestoneId) : null;
-  $('#milestone-dialog-title').textContent = milestone ? '编辑里程碑' : '新建里程碑';
-  const value = (key, fallback = '') => milestone?.[key] ?? fallback;
-  $('#milestone-form-fields').innerHTML = `<datalist id="pm-users-list">${projectUserOptions()}</datalist><label class="form-field full"><span class="label">里程碑名称 *</span><input class="input" name="name" required maxlength="60" value="${inputValue(value('name'))}" placeholder="例如：需求评审完成"></label><label class="form-field"><span class="label">状态</span><select class="select" name="status">${[['todo', '待启动'], ['doing', '进行中'], ['done', '已完成']].map(([key, label]) => `<option value="${key}" ${value('status', 'todo') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="form-field"><span class="label">截止日期</span><input class="input" name="dueDate" type="date" value="${inputValue(value('dueDate'))}"></label><label class="form-field"><span class="label">负责人</span><input class="input" name="owner" list="pm-users-list" maxlength="30" value="${inputValue(value('owner'))}" placeholder="负责人姓名"></label><label class="form-field"><span class="label">验收人</span><input class="input" name="reviewer" list="pm-users-list" maxlength="30" value="${inputValue(value('reviewer'))}" placeholder="验收人姓名"></label><label class="form-field full"><span class="label">里程碑说明</span><textarea class="textarea" name="description" rows="3" placeholder="描述本阶段的交付目标与验收标准">${inputValue(value('description'))}</textarea></label>`;
-  $('#milestone-dialog').showModal();
-  $('#milestone-form [name="name"]')?.focus();
+function renderDocTemplateDialogBody() {
+  const body = $('#doc-template-body');
+  if (body) body.innerHTML = renderDocTemplateGallery(docTemplateCategory);
 }
 
-function closeMilestoneDialog() {
-  editingMilestoneProjectId = '';
-  editingMilestoneId = null;
-  $('#milestone-dialog').close();
+function closeDocTemplateDialog() {
+  $('#doc-template-dialog')?.close();
 }
 
-function saveMilestoneFromDialog() {
-  const data = Object.fromEntries(new FormData($('#milestone-form')).entries());
-  const name = String(data.name || '').trim();
-  if (!name) return toast('请输入里程碑名称');
-  const project = projectForId(state, editingMilestoneProjectId);
-  if (!project) return;
-  if (!Array.isArray(project.milestones)) project.milestones = [];
-  const payload = {
-    name,
-    status: data.status,
-    dueDate: data.dueDate,
-    owner: String(data.owner || '').trim(),
-    reviewer: String(data.reviewer || '').trim(),
-    description: String(data.description || '').trim(),
-  };
-  if (editingMilestoneId) {
-    const milestone = project.milestones.find((entry) => entry.id === editingMilestoneId);
-    if (!milestone) return;
-    Object.assign(milestone, payload);
-    save(); closeMilestoneDialog(); render(); toast('里程碑已更新');
-    return;
-  }
-  project.milestones.push(createMilestone(payload));
-  save(); closeMilestoneDialog(); render(); toast('里程碑已创建');
-}
-
-function deleteMilestone(projectId, milestoneId) {
-  const project = projectForId(state, projectId);
-  const milestone = project?.milestones?.find((entry) => entry.id === milestoneId);
-  if (!milestone) return;
-  const taskCount = Array.isArray(milestone.tasks) ? milestone.tasks.length : 0;
-  openConfirmDialog('删除里程碑', `确认删除里程碑“${milestone.name}”及其下 ${taskCount} 个任务？`, () => {
-    project.milestones = (project.milestones || []).filter((entry) => entry.id !== milestoneId);
-    save(); render(); toast('里程碑已删除');
-  });
-}
-
-function openProjectTaskDialog(projectId, milestoneId, taskId = '') {
-  editingProjectTaskProjectId = projectId;
-  editingProjectTaskMilestoneId = milestoneId;
-  editingProjectTaskId = taskId || null;
-  const project = projectForId(state, projectId);
-  const task = taskId ? findProjectTask(project, taskId)?.task : null;
-  $('#project-task-dialog-title').textContent = task ? '编辑任务' : '新建任务';
-  const value = (key, fallback = '') => task?.[key] ?? fallback;
-  $('#project-task-form-fields').innerHTML = `<datalist id="pm-users-list">${projectUserOptions()}</datalist><label class="form-field full"><span class="label">任务标题 *</span><input class="input" name="title" required maxlength="80" value="${inputValue(value('title'))}" placeholder="例如：完成接口联调"></label><label class="form-field"><span class="label">状态</span><select class="select" name="status">${[['todo', '待办'], ['doing', '进行中'], ['done', '已完成']].map(([key, label]) => `<option value="${key}" ${value('status', 'todo') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="form-field"><span class="label">优先级</span><select class="select" name="priority">${['高', '普通', '低'].map((priority) => `<option ${value('priority', '普通') === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label><label class="form-field"><span class="label">截止日期</span><input class="input" name="dueDate" type="date" value="${inputValue(value('dueDate'))}"></label><label class="form-field"><span class="label">负责人（执行人）</span><input class="input" name="assignee" list="pm-users-list" maxlength="30" value="${inputValue(value('assignee'))}" placeholder="分配给谁"></label><label class="form-field"><span class="label">验收人</span><input class="input" name="reviewer" list="pm-users-list" maxlength="30" value="${inputValue(value('reviewer'))}" placeholder="谁负责验收"></label>`;
-  $('#project-task-dialog').showModal();
-  $('#project-task-form [name="title"]')?.focus();
-}
-
-function closeProjectTaskDialog() {
-  editingProjectTaskProjectId = '';
-  editingProjectTaskMilestoneId = '';
-  editingProjectTaskId = null;
-  $('#project-task-dialog').close();
-}
-
-function saveProjectTaskFromDialog() {
-  const data = Object.fromEntries(new FormData($('#project-task-form')).entries());
-  const title = String(data.title || '').trim();
-  if (!title) return toast('请输入任务标题');
-  const project = projectForId(state, editingProjectTaskProjectId);
-  const milestone = project?.milestones?.find((entry) => entry.id === editingProjectTaskMilestoneId);
-  if (!milestone) return;
-  if (!Array.isArray(milestone.tasks)) milestone.tasks = [];
-  const payload = {
-    title,
-    status: data.status,
-    priority: data.priority,
-    dueDate: data.dueDate,
-    assignee: String(data.assignee || '').trim(),
-    reviewer: String(data.reviewer || '').trim(),
-  };
-  if (editingProjectTaskId) {
-    const found = findProjectTask(project, editingProjectTaskId);
-    if (!found) return;
-    Object.assign(found.task, payload);
-    syncProjectTaskLink(found.task, project, found.milestone);
-    save(); closeProjectTaskDialog(); render(); toast('任务已更新');
-    return;
-  }
-  milestone.tasks.push(createProjectTask(payload));
-  save(); closeProjectTaskDialog(); render(); toast('任务已创建');
-}
-
-function deleteProjectTask(projectId, milestoneId, taskId) {
-  const project = projectForId(state, projectId);
-  const found = findProjectTask(project, taskId);
-  if (!found) return;
-  const { task, parentTask, milestone } = found;
-  const childrenCount = (task.subtasks || []).length;
-  const msg = childrenCount ? `确认删除任务“${task.title || '未命名任务'}”及其 ${childrenCount} 个子任务？` : `确认删除任务“${task.title || '未命名任务'}”？`;
-  openConfirmDialog('删除任务', msg, () => {
-    if (parentTask) parentTask.subtasks = (parentTask.subtasks || []).filter((entry) => entry.id !== taskId);
-    else milestone.tasks = (milestone.tasks || []).filter((entry) => entry.id !== taskId);
-    if (selectedProjectTaskId === taskId) selectedProjectTaskId = '';
-    save(); render(); toast('任务已删除');
-  });
-}
-
-function toggleTaskBlocked(taskId) {
-  const task = findProjectTask(projectForId(state, selectedProjectId), taskId)?.task;
-  if (!task) return;
-  task.blocked = !task.blocked;
-  save(); render();
-  toast(task.blocked ? '任务已标记为阻塞' : '已解除阻塞标记');
-}
-
-function acceptProjectTask(projectId, taskId) {
-  const found = findProjectTask(projectForId(state, projectId), taskId);
-  if (!found) return;
-  found.task.acceptanceStatus = 'accepted';
-  save(); render(); toast('已通过验收');
-}
-
-function reworkProjectTask(projectId, taskId) {
-  const found = findProjectTask(projectForId(state, projectId), taskId);
-  if (!found) return;
-  found.task.status = 'doing';
-  found.task.acceptanceStatus = 'rework';
-  save(); render(); toast('已退回修改');
-}
-
-function openProjectTaskFromAcceptance(projectId, taskId) {
-  selectedProjectId = projectId;
-  selectedProjectTaskId = taskId;
-  activeTab = 'projects';
-  render();
-}
-
-function syncProjectTaskLink(task, project, milestone) {
-  if (!task.workItemId) return;
-  const item = state.workItems.find((entry) => entry.id === task.workItemId);
-  if (!item) return;
-  item.title = task.title;
-  item.priority = task.priority || item.priority;
-  item.dueDate = task.dueDate || item.dueDate;
-  item.status = task.status === 'done' ? 'done' : task.status === 'doing' ? 'doing' : item.status;
-  item.reviewer = task.reviewer || item.reviewer;
-  item.owner = task.assignee || item.owner;
-  item.description = `项目「${project.name}」· 里程碑「${milestone.name}」`;
-  if (item.status === 'done' && !item.completedAt) item.completedAt = new Date().toISOString();
-  if (item.status !== 'done') { item.completedAt = ''; item.acceptanceStatus = ''; }
-}
-
-function syncProjectTaskToPool(projectId, milestoneId, taskId) {
-  const project = projectForId(state, projectId);
-  const found = findProjectTask(project, taskId);
-  if (!found) return;
-  const { task, milestone } = found;
-  const title = String(task.title || '').trim();
-  if (!title) return toast('请先填写任务标题');
-  const previousReviewer = '';
-  let item = task.workItemId ? state.workItems.find((entry) => entry.id === task.workItemId) : null;
-  if (!item) {
-    item = {
-      id: crypto.randomUUID(),
-      title,
-      description: `项目「${project.name}」· 里程碑「${milestone.name}」`,
-      category: project.category || '项目管理',
-      planType: '单人工作',
-      priority: task.priority || '普通',
-      dueDate: task.dueDate || '',
-      status: task.status === 'done' ? 'done' : task.status === 'doing' ? 'doing' : 'todo',
-      reviewer: task.reviewer || '',
-      acceptanceStatus: '',
-      performanceTaskId: task.performanceTaskId || '',
-      createdAt: new Date().toISOString(),
-      completedAt: task.status === 'done' ? new Date().toISOString() : '',
-      owner: task.assignee || project.owner || activeUser()?.name || '',
-    };
-    state.workItems.unshift(item);
-    task.workItemId = item.id;
+function applyDocTemplate(templateId) {
+  const template = documentTemplateFor(templateId);
+  if (!template) return;
+  const node = createDocumentNode(null, template.title);
+  if (template.id === 'english-scene-dialogue') {
+    node.sceneData = createEnglishSceneData();
+    node.body = '';
   } else {
-    syncProjectTaskLink(task, project, milestone);
+    node.body = template.body;
   }
-  if (item.reviewer) notifyReviewerAssignment(item, previousReviewer);
-  save(); render();
-  toast('已同步到任务池，可在「验收工作」跟进');
+  state.documentTree.push(node);
+  docSelection = { kind: 'doc', id: node.id };
+  save();
+  closeDocTemplateDialog();
+  render();
+  toast(`已用「${template.name}」新建文档`);
 }
 
-function recordProjectTaskPerformance(projectId, milestoneId, taskId) {
-  const project = projectForId(state, projectId);
-  const found = findProjectTask(project, taskId);
-  if (!found) return;
-  const { task, milestone } = found;
-  if (task.performanceTaskId) {
-    selectedWorkspaceView = 'performance';
-    activeTab = 'summary';
-    summaryFilters = { search: '', source: 'task', status: '' };
-    render();
-    toast('该任务已建立绩效记录');
-    return;
-  }
-  const title = String(task.title || '').trim();
-  if (!title) return toast('请先填写任务标题');
-  const performanceTaskId = crypto.randomUUID();
-  state.tasks.unshift({
-    id: performanceTaskId,
-    date: task.dueDate || dateToISO(new Date()),
-    content: title,
-    body: '',
-    category: project.category || state.settings.taskCategories[0] || '其他',
-    planType: '单人工作',
-    collaborator: '',
-    estimatedHours: '',
-    actualHours: '',
-    completionPct: task.status === 'done' ? 100 : 0,
-    collaborationPct: 0,
-    innovation: '',
-    selfScore: '',
-    reviewerScore: '',
-    nextPlan: '',
-    blocker: milestone.description || '',
-    breakthrough: '',
-    subtasks: [],
-  });
-  task.performanceTaskId = performanceTaskId;
-  if (task.workItemId) {
-    const item = state.workItems.find((entry) => entry.id === task.workItemId);
-    if (item) item.performanceTaskId = performanceTaskId;
-  }
-  save(); render();
-  toast('已记入绩效，请补充工时与评分');
+function activeSceneNode() {
+  if (docSelection.kind !== 'doc') return null;
+  const node = documentNodes(state).find((n) => n.id === docSelection.id);
+  return isEnglishScene(node) ? node : null;
 }
 
-function addProjectSubtask(projectId, milestoneId, taskId) {
-  const project = projectForId(state, projectId);
-  const parent = findProjectTask(project, taskId)?.task;
-  if (!parent) return;
-  if (!Array.isArray(parent.subtasks)) parent.subtasks = [];
-  const subtask = createProjectTask({ title: '', assignee: parent.assignee, reviewer: parent.reviewer, dueDate: parent.dueDate, priority: parent.priority });
-  parent.subtasks.push(subtask);
-  collapsedTasks.delete(taskId);
-  selectedProjectTaskId = subtask.id;
-  save(); render();
-  toast('已添加子任务，请在右侧详情填写标题');
-}
-
-function addTaskDeliverable(taskId) {
-  const task = findProjectTask(projectForId(state, selectedProjectId), taskId)?.task;
-  if (!task) return;
-  if (!Array.isArray(task.deliverables)) task.deliverables = [];
-  task.deliverables.push({ id: crypto.randomUUID(), text: '', done: false });
-  save(); render();
-  const input = document.querySelector(`[data-deliverable-field="text"][data-task-id="${taskId}"]:last-of-type`);
-  input?.focus();
-}
-
-function addTaskComment(taskId) {
-  const task = findProjectTask(projectForId(state, selectedProjectId), taskId)?.task;
-  if (!task) return;
-  const input = document.querySelector(`[data-task-comment-input][data-task-id="${taskId}"]`);
-  const text = input?.value.trim();
-  if (!text) return toast('请输入评论内容');
-  if (!Array.isArray(task.comments)) task.comments = [];
-  task.comments.push({ id: crypto.randomUUID(), text, author: activeUser()?.name || '我', createdAt: dateToISO(new Date()) });
-  save(); render();
-  toast('评论已发布');
-}
-
-function openSopTemplateDialog(templateId = '', duplicate = false) {
-  const source = templateId ? sopTemplateForId(state, templateId) : null;
-  const editable = source && !duplicate;
-  editingSopTemplateId = editable ? source.id : null;
-  editingSopNodes = (source && source.nodes && source.nodes.length ? source.nodes : [createSopNode()]).map((node) => ({ ...node }));
-  $('#sop-template-dialog-title').textContent = editable ? '编辑 SOP 模板' : (source ? '复制 SOP 模板' : '新建 SOP 模板');
-  $('#sop-template-form-fields').innerHTML = `<div class="sop-template-basics"><label class="form-field"><span class="label">模板名称 *</span><input class="input" name="name" required maxlength="60" value="${inputValue(source ? `${source.name}${duplicate ? ' 副本' : ''}` : '')}" placeholder="例如：版本发布标准流程"></label><label class="form-field"><span class="label">适用场景</span><input class="input" name="scene" maxlength="80" value="${inputValue(source?.scene)}" placeholder="例如：软件版本迭代与发布"></label><label class="form-field"><span class="label">默认负责人角色</span><input class="input" name="defaultOwnerRole" maxlength="30" value="${inputValue(source?.defaultOwnerRole)}" placeholder="例如：研发负责人"></label><label class="form-field"><span class="label">默认验收角色</span><input class="input" name="defaultReviewerRole" maxlength="30" value="${inputValue(source?.defaultReviewerRole)}" placeholder="例如：质量负责人"></label><label class="form-field"><span class="label">标准工期（天）</span><input class="input" name="standardDuration" type="number" min="1" max="365" value="${inputValue(source?.standardDuration)}" placeholder="例如：7"></label></div><div class="sop-template-nodes-title"><div><strong>节点执行流程</strong><small>每个节点按「输入 → 执行 → 输出 → 验收 → 下一步」流转</small></div><button type="button" class="button ghost" data-action="add-sop-node">+ 添加节点</button></div><div id="sop-node-editor">${renderSopNodeEditor(editingSopNodes)}</div>`;
-  $('#sop-template-dialog').showModal();
-  $('#sop-template-form [name="name"]')?.focus();
-}
-
-function closeSopTemplateDialog() {
-  editingSopTemplateId = null;
-  editingSopNodes = [];
-  $('#sop-template-dialog').close();
-}
-
-function saveSopTemplateFromDialog() {
-  const data = Object.fromEntries(new FormData($('#sop-template-form')).entries());
-  const name = String(data.name || '').trim();
-  if (!name) return toast('请输入模板名称');
-  const nodes = editingSopNodes.map((node) => ({ ...node })).filter((node) => String(node.action || '').trim() || String(node.input || '').trim());
-  if (!nodes.length) return toast('请至少填写一个流程节点');
-  const existing = editingSopTemplateId ? sopTemplateForId(state, editingSopTemplateId) : null;
-  const template = {
-    id: editingSopTemplateId || crypto.randomUUID(),
-    name,
-    scene: String(data.scene || '').trim(),
-    defaultOwnerRole: String(data.defaultOwnerRole || '').trim(),
-    defaultReviewerRole: String(data.defaultReviewerRole || '').trim(),
-    standardDuration: data.standardDuration,
-    nodes,
-    createdAt: existing?.createdAt || new Date().toISOString(),
-    order: existing && Number.isFinite(Number(existing.order)) ? Number(existing.order) : Date.now(),
-  };
-  if (!Array.isArray(state.sopTemplates)) state.sopTemplates = [];
-  const index = state.sopTemplates.findIndex((item) => item.id === template.id);
-  if (index >= 0) state.sopTemplates[index] = template; else state.sopTemplates.push(template);
-  save(); closeSopTemplateDialog(); render();
-  toast(index >= 0 ? 'SOP 模板已更新' : 'SOP 模板已添加');
-}
-
-function deleteSopTemplate(templateId) {
-  const template = sopTemplateForId(state, templateId);
-  if (!template) return;
-  openConfirmDialog('删除模板', `确认删除 SOP 模板「${template.name}」？已由它生成的项目不受影响。`, () => {
-    state.sopTemplates = state.sopTemplates.filter((item) => item.id !== templateId);
-    save(); render(); toast('SOP 模板已删除');
-  });
-}
-
-function generateProjectFromTemplate(templateId) {
-  const template = sopTemplateForId(state, templateId);
-  if (!template) return;
-  openPromptDialog('由模板生成项目', '项目名称', template.name, (name) => {
-    const projectName = String(name || '').trim() || template.name;
-    if (!projectName) return toast('请输入项目名称');
-    const nodes = (template.nodes || []).filter((node) => String(node.action || node.input || '').trim());
-    const duration = Math.max(1, Number(template.standardDuration) || 7);
-    const project = createProjectNode({
-      name: projectName,
-      description: template.scene || `由 SOP 模板「${template.name}」生成`,
-      category: '项目管理',
-      status: 'todo',
-      stage: '规划立项',
-      owner: template.defaultOwnerRole || '',
-    });
-    const start = new Date();
-    nodes.forEach((node, index) => {
-      const due = new Date(start);
-      due.setDate(start.getDate() + duration * (index + 1));
-      const dueISO = dateToISO(due);
-      const milestone = createMilestone({
-        name: node.action || node.next || `阶段 ${index + 1}`,
-        description: node.input || '',
-        owner: template.defaultOwnerRole || '',
-        reviewer: template.defaultReviewerRole || '',
-        dueDate: dueISO,
-        status: 'todo',
-        order: (index + 1) * 10,
-      });
-      milestone.tasks = [createProjectTask({
-        title: node.action || `执行阶段 ${index + 1}`,
-        assignee: template.defaultOwnerRole || '',
-        reviewer: template.defaultReviewerRole || '',
-        dueDate: dueISO,
-        status: 'todo',
-        priority: '普通',
-        requirement: node.input || '',
-        acceptance: node.acceptance || '',
-        deliverables: node.output ? [{ id: crypto.randomUUID(), text: node.output, done: false }] : [],
-      })];
-      project.milestones.push(milestone);
-    });
-    if (!Array.isArray(state.projects)) state.projects = [];
-    state.projects.push(project);
-    selectedProjectId = project.id;
-    selectedProjectTaskId = '';
-    sopViewOpen = false;
-    save(); render();
-    toast(`已由模板生成项目「${projectName}」，共 ${nodes.length} 个里程碑`);
-  });
+function activeSceneDialogue() {
+  const node = activeSceneNode();
+  if (!node) return null;
+  return (node.sceneData.dialogue || []).find((d) => d.id === node.sceneData.activeDialogueId) || null;
 }
 
 function renderDocEmpty() {
@@ -2890,13 +2274,16 @@ function renderDocuments() {
   } else if (docSelection.kind === 'doc') {
     const node = documentNodes(state).find((n) => n.id === docSelection.id);
     if (node) {
-      header = `<div class="doc-editor-head"><div class="doc-editor-breadcrumb"><span>文档库</span><span>/</span><span>${esc(node.title || '未命名文档')}</span></div><span class="tag">文档</span></div><div class="doc-editor-title-row"><input class="doc-editor-title" data-doc-title data-doc-id="${esc(node.id)}" value="${inputValue(node.title)}" placeholder="未命名文档"></div>`;
-      body = `<div class="doc-editor-body">${renderNovelEditor(node, 'doc')}</div>`;
+      const isScene = isEnglishScene(node);
+      header = `<div class="doc-editor-head"><div class="doc-editor-breadcrumb"><span>文档库</span><span>/</span><span>${esc(node.title || '未命名文档')}</span></div><span class="tag ${isScene ? 'green' : ''}">${isScene ? '学习工具' : '文档'}</span></div><div class="doc-editor-title-row"><input class="doc-editor-title" data-doc-title data-doc-id="${esc(node.id)}" value="${inputValue(node.title)}" placeholder="未命名文档"></div>`;
+      body = isScene
+        ? `<div class="doc-editor-body scene-editor-body">${renderEnglishScene(node, sceneAvatarPickerCharId)}</div>`
+        : `<div class="doc-editor-body">${renderNovelEditor(node, 'doc')}</div>`;
     } else {
       body = renderDocEmpty();
     }
   }
-  return `<div class="doc-workspace"><aside class="doc-sidebar"><div class="doc-sidebar-head"><h2>文档</h2><div class="doc-sidebar-actions"><button class="button primary" data-action="add-doc"><i class="ri-add-line"></i> 文档</button><button class="button" data-action="add-doc-folder"><i class="ri-folder-add-line"></i> 文件夹</button></div></div>${renderDocTree(state, { expanded: docExpanded, selectedKind: docSelection.kind, selectedId: docSelection.id })}</aside><section class="doc-editor-pane">${header}${body}</section></div>`;
+  return `<div class="doc-workspace"><aside class="doc-sidebar"><div class="doc-sidebar-head"><div class="doc-sidebar-title-row"><h2>文档</h2><button class="button ghost doc-sidebar-template" data-action="open-doc-template"><i class="ri-magic-line"></i> 模板库</button></div><div class="doc-sidebar-actions"><button class="button primary" data-action="add-doc"><i class="ri-add-line"></i> 新建文档</button><button class="button" data-action="add-doc-folder"><i class="ri-folder-add-line"></i> 文件夹</button></div></div>${renderDocTree(state, { expanded: docExpanded, selectedKind: docSelection.kind, selectedId: docSelection.id })}</aside><section class="doc-editor-pane">${header}${body}</section></div>`;
 }
 
 function renderTaskSubtaskEditor() {
@@ -2997,7 +2384,7 @@ function saveSummaryItem() {
       ...(existing || {}), id, title: data.title.trim(), description: data.description.trim(), category: data.category,
       planType: data.planType, priority: data.priority, dueDate: data.dueDate, status: data.status, reviewer: data.reviewer.trim(),
       acceptanceStatus: existing?.acceptanceStatus || '', performanceTaskId: existing?.performanceTaskId || '', createdAt: existing?.createdAt || now,
-      completedAt: data.status === 'done' ? (existing?.completedAt || now) : '', owner: existing?.owner || activeUser()?.name || '',
+      completedAt: data.status === 'done' ? (existing?.completedAt || now) : '',
     };
     if (data.status !== 'done') item.acceptanceStatus = '';
     const index = state.workItems.findIndex((entry) => entry.id === id);
@@ -3035,7 +2422,7 @@ function createSummaryInlineItem(type) {
     state.tasks.unshift({ id, date: today, content: '', body: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', collaborator: '', estimatedHours: '', actualHours: '', completionPct: '', collaborationPct: '', innovation: '', selfScore: '', reviewerScore: '', nextPlan: '', blocker: '', breakthrough: '', subtasks: [] });
     focusField = 'content';
   } else if (type === 'pool') {
-    state.workItems.unshift({ id, title: '', description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: '普通', dueDate: today, status: 'todo', reviewer: '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '', owner: activeUser()?.name || '' });
+    state.workItems.unshift({ id, title: '', description: '', category: state.settings.taskCategories[0] || '其他', planType: '单人工作', priority: '普通', dueDate: today, status: 'todo', reviewer: '', acceptanceStatus: '', performanceTaskId: '', createdAt: new Date().toISOString(), completedAt: '' });
     focusField = 'title';
   } else if (type.startsWith('daily-')) {
     sourceKey = 'daily';
@@ -3063,9 +2450,7 @@ function updateSummaryRowField(target) {
     const numeric = ['estimatedHours', 'actualHours', 'completionPct', 'selfScore', 'reviewerScore'].includes(field);
     item[field] = numeric ? formNumber(field, target.value) : target.value;
   } else if (metadata.sourceKey === 'pool') {
-    const previousReviewer = item.reviewer;
     item[field] = target.value;
-    if (field === 'reviewer') notifyReviewerAssignment(item, previousReviewer);
     if (field === 'status' && target.value === 'done' && !item.completedAt) item.completedAt = new Date().toISOString();
     if (field === 'status' && target.value !== 'done') { item.completedAt = ''; item.acceptanceStatus = ''; }
   } else if (metadata.sourceKey === 'daily') {
@@ -3176,6 +2561,8 @@ document.addEventListener('click', (event) => {
   if (blankTaskRow && !event.target.matches('[data-daily-quick-task]')) { blankTaskRow.querySelector('[data-daily-quick-task]')?.focus(); return; }
   const summaryBlankRow = event.target.closest('.summary-quick-blank-row');
   if (summaryBlankRow && !event.target.matches('[data-summary-quick-task]')) { summaryBlankRow.querySelector('[data-summary-quick-task]')?.focus(); return; }
+  const sceneBlankRow = event.target.closest('[data-scene-blank-row]');
+  if (sceneBlankRow && !event.target.closest('input, select, button')) { sceneBlankRow.querySelector('[data-scene-blank-text]')?.focus(); return; }
   const nav = event.target.closest('[data-tab]'); if (nav) return setActiveTab(nav.dataset.tab);
   const monthSelect = event.target.closest('[data-month-select]'); if (monthSelect) return;
   const day = event.target.closest('[data-day]'); if (day) { selectedDate = day.dataset.day; render(); return; }
@@ -3200,12 +2587,6 @@ document.addEventListener('click', (event) => {
     if (action.dataset.notificationType === 'chat' && notif?.fromUserId) {
       setSelectedChatUserId(notif.fromUserId);
       chatTab = 'messages';
-    } else if (notif?.type === 'overdue' || notif?.type === 'deadline') {
-      selectedWorkspaceView = 'pool';
-      summaryFilters = { search: '', source: 'pool', status: '' };
-      activeTab = 'summary';
-    } else if (notif?.type === 'daily-reminder') {
-      activeTab = 'daily';
     }
     save(); render();
     return;
@@ -3371,10 +2752,7 @@ document.addEventListener('click', (event) => {
   if (type === 'toggle-pool-details') { if (expandedPoolIds.has(action.dataset.id)) expandedPoolIds.delete(action.dataset.id); else expandedPoolIds.add(action.dataset.id); render(); return; }
   if (type === 'delete-pool') { state.workItems = state.workItems.filter((item) => item.id !== action.dataset.id); save(); render(); toast('任务池事项已删除'); return; }
   if (type === 'accept-pool') { const item = state.workItems.find((entry) => entry.id === action.dataset.id); if (item) { item.acceptanceStatus = 'accepted'; save(); render(); toast('已通过验收'); } return; }
-  if (type === 'rework-pool') { const item = state.workItems.find((entry) => entry.id === action.dataset.id); if (item) { item.status = 'doing'; item.acceptanceStatus = 'rework'; notifyRework(item); save(); render(); toast('已退回修改'); } return; }
-  if (type === 'accept-project-task') return acceptProjectTask(action.dataset.projectId, action.dataset.taskId);
-  if (type === 'rework-project-task') return reworkProjectTask(action.dataset.projectId, action.dataset.taskId);
-  if (type === 'open-project-task-acceptance') return openProjectTaskFromAcceptance(action.dataset.projectId, action.dataset.taskId);
+  if (type === 'rework-pool') { const item = state.workItems.find((entry) => entry.id === action.dataset.id); if (item) { item.status = 'doing'; item.acceptanceStatus = 'rework'; save(); render(); toast('已退回修改'); } return; }
   if (type === 'record-performance') { const item = state.workItems.find((entry) => entry.id === action.dataset.id); if (item) { const taskId = crypto.randomUUID(); state.tasks.unshift({ id: taskId, date: item.completedAt ? dateToISO(item.completedAt) : dateToISO(new Date()), content: item.title, body: '', category: item.category || state.settings.taskCategories[0] || '其他', planType: item.planType || '单人工作', collaborator: '', estimatedHours: '', actualHours: '', completionPct: 100, collaborationPct: 0, innovation: '', selfScore: '', reviewerScore: '', nextPlan: '', blocker: item.description || '', breakthrough: '', subtasks: [] }); item.performanceTaskId = taskId; save(); selectedWorkspaceView = 'performance'; activeTab = 'summary'; summaryFilters = { search: '', source: 'task', status: '' }; render(); toast('已建立绩效记录，请补充工时和评分'); } return; }
   if (type === 'add-plan-item') return addPlanItem(action.dataset.planKind, action.dataset.planKey);
   if (type === 'toggle-plan-item') { const plan = planFor(action.dataset.planKind, action.dataset.planKey); const item = plan.items.find((entry) => entry.id === action.dataset.itemId); if (item) { setLinkDone(item, action.checked); save(); render(); } return; }
@@ -3393,6 +2771,10 @@ document.addEventListener('click', (event) => {
   if (type === 'add-override') { const date = $('#override-date').value; if (!date) return toast('请选择日期'); const kind = $('#override-kind').value; const hours = $('#override-hours').value; state.calendarOverrides[date] = { kind, ...(hours === '' ? {} : { hours: Number(hours) }) }; save(); render(); return toast('日期规则已添加'); }
   if (type === 'remove-override') { delete state.calendarOverrides[action.dataset.date]; save(); render(); return toast('日期规则已移除'); }
   if (type === 'select-doc') { docSelection = { kind: 'doc', id: action.dataset.docId }; render(); return; }
+  if (type === 'open-doc-template') return openDocTemplateDialog();
+  if (type === 'close-doc-template') return closeDocTemplateDialog();
+  if (type === 'doc-template-category') { docTemplateCategory = action.dataset.category || 'all'; renderDocTemplateDialogBody(); return; }
+  if (type === 'use-doc-template') return applyDocTemplate(action.dataset.templateId);
   if (type === 'select-doc-task') { docSelection = { kind: 'task', id: action.dataset.taskId }; render(); return; }
   if (type === 'toggle-doc-folder') { const fid = action.dataset.folderId; if (docExpanded.has(fid)) docExpanded.delete(fid); else docExpanded.add(fid); render(); return; }
   if (type === 'add-doc') { const node = createDocumentNode(null); state.documentTree.push(node); docSelection = { kind: 'doc', id: node.id }; save(); render(); setTimeout(() => document.querySelector(`[data-doc-title][data-doc-id="${node.id}"]`)?.select(), 0); return; }
@@ -3412,32 +2794,6 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (type === 'select-project') { selectedProjectId = action.dataset.projectId; render(); return; }
-  if (type === 'open-project') { selectedProjectId = action.dataset.projectId; selectedProjectTaskId = ''; activeProjectTab = '概览'; render(); return; }
-  if (type === 'project-detail-tab') { activeProjectTab = action.dataset.detailTab; render(); return; }
-  if (type === 'open-project-center') { selectedProjectId = ''; selectedProjectTaskId = ''; render(); return; }
-  if (type === 'project-filter') { projectCenterFilter = action.dataset.filter; render(); return; }
-  if (type === 'project-view-mode') { projectViewMode = action.dataset.mode; localStorage.setItem('performance-projects-view-mode', projectViewMode); render(); return; }
-  if (type === 'toggle-milestone') { const mid = action.dataset.milestoneId; if (collapsedMilestones.has(mid)) collapsedMilestones.delete(mid); else collapsedMilestones.add(mid); render(); return; }
-  if (type === 'toggle-project-task') { const tid = action.dataset.taskId; if (collapsedTasks.has(tid)) collapsedTasks.delete(tid); else collapsedTasks.add(tid); render(); return; }
-  if (type === 'toggle-task-blocked') return toggleTaskBlocked(action.dataset.taskId);
-  if (type === 'open-project-task-detail') { selectedProjectTaskId = action.dataset.taskId; render(); return; }
-  if (type === 'close-project-task-detail') { selectedProjectTaskId = ''; render(); return; }
-  if (type === 'add-project-subtask') return addProjectSubtask(action.dataset.projectId, action.dataset.milestoneId, action.dataset.taskId);
-  if (type === 'add-task-deliverable') return addTaskDeliverable(action.dataset.taskId);
-  if (type === 'toggle-task-deliverable') { const dTask = findProjectTask(projectForId(state, selectedProjectId), action.dataset.taskId)?.task; const deliverable = dTask?.deliverables?.find((entry) => entry.id === action.dataset.deliverableId); if (deliverable) { deliverable.done = action.checked; save(); render(); } return; }
-  if (type === 'delete-task-deliverable') { const dTask = findProjectTask(projectForId(state, selectedProjectId), action.dataset.taskId)?.task; if (dTask) { dTask.deliverables = (dTask.deliverables || []).filter((entry) => entry.id !== action.dataset.deliverableId); save(); render(); } return; }
-  if (type === 'add-task-comment') return addTaskComment(action.dataset.taskId);
-  if (type === 'open-sop-templates') { sopViewOpen = true; selectedProjectId = ''; selectedProjectTaskId = ''; render(); return; }
-  if (type === 'sop-back-center') { sopViewOpen = false; render(); return; }
-  if (type === 'add-sop-template') return openSopTemplateDialog();
-  if (type === 'edit-sop-template') return openSopTemplateDialog(action.dataset.templateId);
-  if (type === 'duplicate-sop-template') return openSopTemplateDialog(action.dataset.templateId, true);
-  if (type === 'delete-sop-template') return deleteSopTemplate(action.dataset.templateId);
-  if (type === 'sop-generate-project') return generateProjectFromTemplate(action.dataset.templateId);
-  if (type === 'add-sop-node') { editingSopNodes.push(createSopNode()); $('#sop-node-editor').innerHTML = renderSopNodeEditor(editingSopNodes); return; }
-  if (type === 'remove-sop-node') { if (editingSopNodes.length <= 1) return toast('至少保留一个流程节点'); editingSopNodes.splice(Number(action.dataset.nodeIndex), 1); $('#sop-node-editor').innerHTML = renderSopNodeEditor(editingSopNodes); return; }
-  if (type === 'cancel-sop-template') return closeSopTemplateDialog();
-  if (type === 'remove-task-predecessor') { const pTask = findProjectTask(projectForId(state, selectedProjectId), action.dataset.taskId)?.task; if (pTask) { pTask.predecessors = (pTask.predecessors || []).filter((id) => id !== action.dataset.predecessorId); save(); render(); } return; }
   if (type === 'add-project') return openProjectDialog();
   if (type === 'edit-project') return openProjectDialog(action.dataset.projectId);
   if (type === 'delete-project') return deleteProject(action.dataset.projectId);
@@ -3450,16 +2806,68 @@ document.addEventListener('click', (event) => {
   if (type === 'close-sync-pool') return closeSyncPoolDialog();
   if (type === 'sync-pool-confirm') return performSyncToPool();
   if (type === 'toggle-sync-section') { const key = action.dataset.section; if (syncPoolSelected.has(key)) syncPoolSelected.delete(key); else syncPoolSelected.add(key); action.closest('.sync-pool-section')?.classList.toggle('selected', syncPoolSelected.has(key)); return; }
+  // 英语场景 · 交互式学习工具
+  if (type === 'scene-add-char') {
+    const node = activeSceneNode(); if (!node) return;
+    node.sceneData.characters.push({ id: crypto.randomUUID(), name: '新人物', role: '', avatar: AVATAR_LIBRARY[0], self: false });
+    save(); render();
+    return;
+  }
+  if (type === 'scene-del-char') {
+    const node = activeSceneNode(); if (!node) return;
+    const id = action.dataset.sceneCharId;
+    node.sceneData.characters = node.sceneData.characters.filter((c) => c.id !== id);
+    node.sceneData.dialogue.forEach((d) => { if (d.characterId === id) d.characterId = node.sceneData.characters[0]?.id || ''; });
+    save(); render();
+    return;
+  }
+  if (type === 'scene-open-avatar') { sceneAvatarPickerCharId = action.dataset.sceneCharId; render(); return; }
+  if (type === 'scene-close-avatar') { sceneAvatarPickerCharId = null; render(); return; }
+  if (type === 'scene-pick-avatar') {
+    const node = activeSceneNode(); if (!node) return;
+    const char = (node.sceneData.characters || []).find((c) => c.id === sceneAvatarPickerCharId);
+    if (char) { char.avatar = action.dataset.avatar; save(); }
+    sceneAvatarPickerCharId = null;
+    render();
+    return;
+  }
+  if (type === 'scene-select-dialogue') {
+    if (event.target.closest('input, textarea, select, button')) return;
+    const node = activeSceneNode(); if (!node) return;
+    node.sceneData.activeDialogueId = action.dataset.sceneDialogueId;
+    save(); render();
+    return;
+  }
+  if (type === 'scene-del-dialogue') {
+    const node = activeSceneNode(); if (!node) return;
+    const id = action.dataset.sceneDialogueId;
+    node.sceneData.dialogue = node.sceneData.dialogue.filter((d) => d.id !== id);
+    if (node.sceneData.activeDialogueId === id) node.sceneData.activeDialogueId = node.sceneData.dialogue[0]?.id || '';
+    save(); render();
+    return;
+  }
+  if (type === 'scene-add-vocab') { const d = activeSceneDialogue(); if (d) { d.notes.vocab.push({ id: crypto.randomUUID(), word: '', phonetic: '', meaning: '' }); save(); render(); } return; }
+  if (type === 'scene-del-vocab') { const d = activeSceneDialogue(); if (d) { d.notes.vocab = d.notes.vocab.filter((i) => i.id !== action.dataset.sceneVocabId); save(); render(); } return; }
+  if (type === 'scene-add-phrase') { const d = activeSceneDialogue(); if (d) { d.notes.phrases.push({ id: crypto.randomUUID(), text: '', meaning: '' }); save(); render(); } return; }
+  if (type === 'scene-del-phrase') { const d = activeSceneDialogue(); if (d) { d.notes.phrases = d.notes.phrases.filter((i) => i.id !== action.dataset.scenePhraseId); save(); render(); } return; }
+  if (type === 'scene-add-alt') { const d = activeSceneDialogue(); if (d) { d.notes.alternatives.push({ id: crypto.randomUUID(), text: '' }); save(); render(); } return; }
+  if (type === 'scene-del-alt') { const d = activeSceneDialogue(); if (d) { d.notes.alternatives = d.notes.alternatives.filter((i) => i.id !== action.dataset.sceneAltId); save(); render(); } return; }
+  if (type === 'scene-add-usage') { const d = activeSceneDialogue(); if (d) { d.notes.usage.push({ id: crypto.randomUUID(), text: '' }); save(); render(); } return; }
+  if (type === 'scene-del-usage') { const d = activeSceneDialogue(); if (d) { d.notes.usage = d.notes.usage.filter((i) => i.id !== action.dataset.sceneUsageId); save(); render(); } return; }
+  if (type === 'scene-add-grammar') { const d = activeSceneDialogue(); if (d) { d.notes.grammar.push({ id: crypto.randomUUID(), text: '' }); save(); render(); } return; }
+  if (type === 'scene-del-grammar') { const d = activeSceneDialogue(); if (d) { d.notes.grammar = d.notes.grammar.filter((i) => i.id !== action.dataset.sceneGrammarId); save(); render(); } return; }
+  if (type === 'scene-add-check') { const node = activeSceneNode(); if (node) { node.sceneData.checklist.push({ id: crypto.randomUUID(), text: '', done: false }); save(); render(); } return; }
+  if (type === 'scene-del-check') { const node = activeSceneNode(); if (node) { node.sceneData.checklist = node.sceneData.checklist.filter((i) => i.id !== action.dataset.sceneCheckId); save(); render(); } return; }
 });
 
 document.addEventListener('change', async (event) => {
   const target = event.target;
-  if (target.matches('[data-project-search]')) { projectSearch = target.value; render(); return; }
-  if (target.matches('[data-project-task-filter]')) { projectTaskStatusFilter = target.value; render(); return; }
-  if (target.matches('[data-project-task-view]')) { projectTaskView = target.value; render(); return; }
-  if (target.matches('[data-task-field]')) { const task = findProjectTask(projectForId(state, selectedProjectId), target.dataset.taskId)?.task; if (task) { task[target.dataset.taskField] = target.value; save(); render(); } return; }
-  if (target.matches('[data-task-predecessor-select]')) { if (!target.value) return; const task = findProjectTask(projectForId(state, selectedProjectId), target.dataset.taskId)?.task; if (task) { if (!Array.isArray(task.predecessors)) task.predecessors = []; if (!task.predecessors.includes(target.value)) { task.predecessors.push(target.value); save(); render(); toast('已添加前置任务'); } } return; }
-  if (target.matches('[data-deliverable-field]')) { const task = findProjectTask(projectForId(state, selectedProjectId), target.dataset.taskId)?.task; const deliverable = task?.deliverables?.find((entry) => entry.id === target.dataset.deliverableId); if (deliverable) { deliverable.text = target.value; save(); } return; }
+  if (target.matches('.scene-check')) {
+    const node = activeSceneNode(); if (!node) return;
+    const item = (node.sceneData.checklist || []).find((i) => i.id === target.dataset.sceneCheckId);
+    if (item) { item.done = target.checked; save(); }
+    return;
+  }
   if (target.id === 'topbar-date-input') { selectedDailyDate = target.value || dateToISO(new Date()); render(); return; }
   if (target.matches('[data-month-select]')) { currentMonth = Number(target.value); selectedDate = ''; render(); return; }
   if (target.matches('[data-daily-date-select]')) { selectedDailyDate = target.value || dateToISO(new Date()); render(); return; }
@@ -3539,6 +2947,17 @@ document.addEventListener('change', async (event) => {
 
 document.addEventListener('input', (event) => {
   const target = event.target;
+  if (target.matches('[data-scene-meta]')) { const node = activeSceneNode(); if (node) { node.sceneData.meta[target.dataset.sceneMeta] = target.value; save(); } return; }
+  if (target.matches('[data-scene-char-field]')) { const node = activeSceneNode(); if (node) { const c = (node.sceneData.characters || []).find((x) => x.id === target.dataset.sceneCharId); if (c) c[target.dataset.sceneCharField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-dialogue-field]')) { const node = activeSceneNode(); if (node) { const d = (node.sceneData.dialogue || []).find((x) => x.id === target.dataset.sceneDialogueId); if (d) d[target.dataset.sceneDialogueField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-vocab-field]')) { const d = activeSceneDialogue(); if (d) { const i = d.notes.vocab.find((x) => x.id === target.dataset.sceneVocabId); if (i) i[target.dataset.sceneVocabField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-phrase-field]')) { const d = activeSceneDialogue(); if (d) { const i = d.notes.phrases.find((x) => x.id === target.dataset.scenePhraseId); if (i) i[target.dataset.scenePhraseField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-alt-field]')) { const d = activeSceneDialogue(); if (d) { const i = d.notes.alternatives.find((x) => x.id === target.dataset.sceneAltId); if (i) i[target.dataset.sceneAltField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-usage-field]')) { const d = activeSceneDialogue(); if (d) { const i = d.notes.usage.find((x) => x.id === target.dataset.sceneUsageId); if (i) i[target.dataset.sceneUsageField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-grammar-field]')) { const d = activeSceneDialogue(); if (d) { const i = d.notes.grammar.find((x) => x.id === target.dataset.sceneGrammarId); if (i) i[target.dataset.sceneGrammarField] = target.value; save(); } return; }
+  if (target.matches('[data-scene-check-field]')) { const node = activeSceneNode(); if (node) { const i = (node.sceneData.checklist || []).find((x) => x.id === target.dataset.sceneCheckId); if (i) i.text = target.value; save(); } return; }
+  if (target.matches('[data-scene-reflection]')) { const node = activeSceneNode(); if (node) { node.sceneData.reflection = target.value; save(); } return; }
+  if (target.matches('[data-task-subtask-field]')) { const task = taskForId(target.dataset.taskId); const item = task?.subtasks?.find((entry) => entry.id === target.dataset.subtaskId); if (item) { item.text = target.value; save(); } return; }
   if (target.matches('[data-novel-content]')) {
     saveNovelBody(target);
     detectNovelSlash(target);
@@ -3573,7 +2992,6 @@ document.addEventListener('input', (event) => {
     }
     return;
   }
-  if (target.matches('[data-sop-node-field]')) { const node = editingSopNodes[Number(target.dataset.nodeIndex)]; if (node) { node[target.dataset.sopNodeField] = target.value; } return; }
   persistOperationsInput(target);
   if (target.matches('.field-config-input[data-field-config]')) {
     const index = Number(target.dataset.index);
@@ -3590,21 +3008,20 @@ document.addEventListener('blur', (event) => {
   if (event.target.matches('[data-task-field]')) updateTaskField(event.target);
   if (event.target.matches('[data-daily-quick-task]')) commitQuickDailyTask(event.target);
   if (event.target.matches('[data-daily-quick-tomorrow]')) commitQuickTomorrowItem(event.target);
-  if (event.target.matches('[data-kanban-quick]')) commitQuickKanbanTask(event.target);
-  if (event.target.matches('[data-plan-quick]')) commitQuickPlanItem(event.target);
+  if (event.target.matches('[data-daily-quick-kanban]')) commitQuickKanbanTask(event.target);
   if (event.target.matches('[data-summary-quick-task]')) commitQuickSummaryRow(event.target);
+  if (event.target.matches('[data-scene-blank-text]')) commitSceneBlankDialogue(event.target);
 }, true);
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' || event.isComposing) return;
   if (event.target.matches('#chat-message-input')) { event.preventDefault(); const targetId = event.target.dataset.chatTarget; if (targetId) sendChatMessage(targetId); return; }
-  if (event.target.matches('[data-task-comment-input]')) { event.preventDefault(); addTaskComment(event.target.dataset.taskId); return; }
   if (event.target.matches('[data-daily-quick-task]')) { event.preventDefault(); commitQuickDailyTask(event.target, true); return; }
   if (event.target.matches('[data-daily-quick-tomorrow]')) { event.preventDefault(); commitQuickTomorrowItem(event.target, true); return; }
-  if (event.target.matches('[data-kanban-quick]')) { event.preventDefault(); commitQuickKanbanTask(event.target, true); return; }
-  if (event.target.matches('[data-plan-quick]')) { event.preventDefault(); commitQuickPlanItem(event.target, true); return; }
+  if (event.target.matches('[data-daily-quick-kanban]')) { event.preventDefault(); commitQuickKanbanTask(event.target, true); return; }
   if (event.target.matches('[data-summary-quick-task]')) { event.preventDefault(); commitQuickSummaryRow(event.target, true); return; }
+  if (event.target.matches('[data-scene-blank-text]')) { event.preventDefault(); commitSceneBlankDialogue(event.target, true); return; }
   if (event.target.matches('[data-daily-new]')) { event.preventDefault(); document.querySelector(`[data-action="add-daily-item"][data-daily-date="${event.target.dataset.date}"][data-daily-bucket="${event.target.dataset.dailyNew}"]`)?.click(); }
-  if (event.target.matches('[data-task-subtask-field="text"]')) { event.preventDefault(); addSubtaskToTask(event.target.dataset.taskId); }
+  if (event.target.matches('[data-task-subtask-field="text"]')) { event.preventDefault(); const subtaskInput = event.target; const subtaskTask = taskForId(subtaskInput.dataset.taskId); const subtaskItem = subtaskTask?.subtasks?.find((entry) => entry.id === subtaskInput.dataset.subtaskId); if (subtaskItem) subtaskItem.text = subtaskInput.value; addSubtaskToTask(subtaskInput.dataset.taskId); }
 });
 document.addEventListener('keydown', (event) => {
   const editor = event.target.closest && event.target.closest('[data-novel-content]');
@@ -3640,13 +3057,6 @@ document.addEventListener('mousedown', (event) => {
   }
 });
 document.addEventListener('dragstart', (event) => {
-  const navItem = event.target.closest('.nav-item[data-tab]');
-  if (navItem && navItem.closest('.nav-list')) {
-    draggedNavItem = navItem;
-    navItem.classList.add('dragging');
-    if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', navItem.dataset.tab); }
-    return;
-  }
   const block = event.target.closest('[data-sortable-block]');
   if (!block) return;
   if (block.closest('[data-daily-panel].is-frozen')) { event.preventDefault(); return; }
@@ -3656,17 +3066,6 @@ document.addEventListener('dragstart', (event) => {
   if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'copyMove'; event.dataTransfer.setData('text/plain', block.dataset.blockKey); }
 });
 document.addEventListener('dragover', (event) => {
-  if (draggedNavItem) {
-    const target = event.target.closest('.nav-item[data-tab]');
-    if (!target || !target.closest('.nav-list') || target === draggedNavItem) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    document.querySelectorAll('.nav-item.drop-before, .nav-item.drop-after').forEach((node) => node.classList.remove('drop-before', 'drop-after'));
-    const rect = target.getBoundingClientRect();
-    const placeAfter = event.clientY > rect.top + rect.height / 2;
-    target.classList.add(placeAfter ? 'drop-after' : 'drop-before');
-    return;
-  }
   if (!draggedSortableBlock) return;
   const target = event.target.closest('[data-sortable-block]');
   const container = event.target.closest('[data-sort-container]');
@@ -3683,22 +3082,6 @@ document.addEventListener('dragover', (event) => {
   target.classList.add(placeAfter ? 'drop-after' : 'drop-before');
 });
 document.addEventListener('drop', (event) => {
-  if (draggedNavItem) {
-    const target = event.target.closest('.nav-item[data-tab]');
-    if (target && target.closest('.nav-list') && target !== draggedNavItem) {
-      event.preventDefault();
-      const rect = target.getBoundingClientRect();
-      const placeAfter = event.clientY > rect.top + rect.height / 2;
-      const list = draggedNavItem.parentNode;
-      if (placeAfter) target.after(draggedNavItem);
-      else target.before(draggedNavItem);
-      saveNavOrder();
-    }
-    draggedNavItem = null;
-    document.querySelectorAll('.nav-item[draggable]').forEach((node) => { node.draggable = true; });
-    render();
-    return;
-  }
   if (!draggedSortableBlock) return;
   const target = event.target.closest('[data-sortable-block]');
   const container = event.target.closest('[data-sort-container]');
@@ -3720,8 +3103,6 @@ document.addEventListener('drop', (event) => {
   reorderSortableBlocks(target.dataset.sortGroup, draggedSortableBlock.dataset.blockKey, target.dataset.blockKey, placeAfter);
 });
 document.addEventListener('dragend', () => {
-  document.querySelectorAll('.nav-item.dragging, .nav-item.drop-before, .nav-item.drop-after').forEach((node) => node.classList.remove('dragging', 'drop-before', 'drop-after'));
-  draggedNavItem = null;
   document.querySelectorAll('[data-sortable-block].dragging, [data-sortable-block].drop-before, [data-sortable-block].drop-after').forEach((block) => block.classList.remove('dragging', 'drop-before', 'drop-after'));
   document.querySelectorAll('[data-sort-container].copy-target').forEach((node) => node.classList.remove('copy-target'));
   draggedSortableBlock = null;
@@ -3936,9 +3317,6 @@ document.addEventListener('submit', (event) => {
   if (event.target.id === 'user-form') { event.preventDefault(); saveUserFromDialog(); return; }
   if (event.target.id === 'template-form') { event.preventDefault(); saveAssessmentTemplateFromDialog(); return; }
   if (event.target.id === 'project-form') { event.preventDefault(); saveProjectFromDialog(); return; }
-  if (event.target.id === 'milestone-form') { event.preventDefault(); saveMilestoneFromDialog(); return; }
-  if (event.target.id === 'project-task-form') { event.preventDefault(); saveProjectTaskFromDialog(); return; }
-  if (event.target.id === 'sop-template-form') { event.preventDefault(); saveSopTemplateFromDialog(); return; }
   if (event.target.id === 'prompt-form') {
     event.preventDefault();
     const value = $('#prompt-dialog-input')?.value ?? '';
@@ -3978,57 +3356,6 @@ function notifyUser(targetUserId, notification) {
     targetState.notifications.unshift(notification);
     localStorage.setItem(userStateKey(targetUserId), JSON.stringify(targetState));
   }
-  updateChatNavBadge();
-}
-
-function pushSystemNotification(type, payload) {
-  const current = activeUser();
-  if (!current) return;
-  if ((state.notifications || []).some((n) => n.key === payload.key)) return;
-  if (!state.notifications) state.notifications = [];
-  state.notifications.unshift(createNotification(null, current.id, type, payload));
-}
-
-function notifyReviewerAssignment(item, previousReviewer) {
-  const reviewerName = String(item?.reviewer || '').trim();
-  if (!reviewerName || reviewerName === String(previousReviewer || '').trim()) return;
-  const current = activeUser();
-  const target = users.find((u) => u.name.trim() === reviewerName && u.id !== current?.id);
-  if (!target) return;
-  notifyUser(target.id, createNotification(current, target.id, 'reviewer', { title: `「${item.title}」等待你验收`, taskId: item.id, toUserId: target.id }));
-}
-
-function notifyRework(item) {
-  const current = activeUser();
-  const ownerName = String(item?.owner || '').trim();
-  if (!ownerName || ownerName === String(current?.name || '').trim()) return;
-  const target = users.find((u) => u.name.trim() === ownerName && u.id !== current?.id);
-  if (!target) return;
-  notifyUser(target.id, createNotification(current, target.id, 'rework', { title: `「${item.title}」被退回修改，请重新处理。`, taskId: item.id, toUserId: target.id }));
-}
-
-function runReminderChecks() {
-  const current = activeUser();
-  if (!current) return;
-  const today = dateToISO(new Date());
-
-  if (calendarHours(today, state) > 0 && !state.tasks.some((task) => task.date === today && String(task.content || '').trim())) {
-    pushSystemNotification('daily-reminder', { key: `daily-reminder:${today}`, title: '今天还没有填写工作记录，别忘了记录当天的工作投入。' });
-  }
-
-  const upcomingDays = 3;
-  for (const item of state.workItems) {
-    if (!item || item.status === 'done' || !String(item.title || '').trim() || !item.dueDate) continue;
-    const due = new Date(`${item.dueDate}T12:00:00`);
-    const diffDays = Math.round((due.getTime() - new Date(`${today}T12:00:00`).getTime()) / 86400000);
-    if (diffDays < 0) {
-      pushSystemNotification('overdue', { key: `overdue:${item.id}`, title: `「${item.title}」已超期 ${Math.abs(diffDays)} 天，请尽快处理。`, taskId: item.id });
-    } else if (diffDays <= upcomingDays) {
-      pushSystemNotification('deadline', { key: `deadline:${item.id}`, title: `「${item.title}」${diffDays === 0 ? '今天到期' : `${diffDays} 天后到期`}，请安排推进。`, taskId: item.id });
-    }
-  }
-
-  save();
   updateChatNavBadge();
 }
 
@@ -4160,13 +3487,4 @@ function insertMention(userId, userName, editor) {
   closeMentionMenu();
 }
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') runReminderChecks();
-});
-
-export function initPerformanceApp() {
-  runReminderChecks();
-  applyNavOrder();
-  document.querySelectorAll('.nav-list .nav-item[data-tab]').forEach((button) => { button.draggable = true; button.setAttribute('title', '拖动可自定义导航顺序'); });
-  render();
-}
+export function initPerformanceApp() { render(); }
